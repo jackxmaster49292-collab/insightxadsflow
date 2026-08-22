@@ -10,8 +10,8 @@ import base64
 import contextlib
 import os
 import uuid
-from urllib.parse import quote
 from collections.abc import AsyncIterator
+from urllib.parse import quote
 
 import pytest
 
