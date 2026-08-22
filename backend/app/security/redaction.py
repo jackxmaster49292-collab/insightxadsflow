@@ -43,6 +43,12 @@ DENYLISTED_KEYS: frozenset[str] = frozenset(
         "api_hash",
         "ciphertext",
         "credential",
+        # A DSN carries the password inside it, so the whole string is a secret.
+        "dsn",
+        "database_url",
+        "redis_url",
+        "connection_string",
+        "conn_str",
     }
 )
 

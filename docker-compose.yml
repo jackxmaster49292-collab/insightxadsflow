@@ -5,9 +5,18 @@ x-backend: &backend
     context: ./backend
   env_file: .env
   environment:
-    # Overrides .env, which points at the host ports for running the backend
-    # outside Docker. Inside the network, services resolve each other by name.
-    DATABASE_URL: postgresql+asyncpg://insight:${POSTGRES_PASSWORD:-insight}@postgres:5432/insight
+    # Components, not a pre-built DSN. The application percent-encodes each one,
+    # so a password may contain "@", "/" or ":" without corrupting the URL.
+    # Interpolating a raw password into a DSN here would truncate the host and
+    # surface as an unresolvable-hostname error, which points at the wrong thing.
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: insight
+    POSTGRES_DB: insight
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-insight}
+    # Blank overrides any DATABASE_URL left in .env, which would otherwise point
+    # at localhost from a run outside Docker.
+    DATABASE_URL: ""
     REDIS_URL: redis://redis:6379/0
   depends_on:
     postgres:

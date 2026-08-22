@@ -9,8 +9,9 @@ from __future__ import annotations
 import base64
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import quote
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 TelegramProvider = Literal["mock", "live"]
@@ -22,7 +23,24 @@ class Settings(BaseSettings):
     )
 
     # --- Core infrastructure ------------------------------------------------
-    database_url: str = "postgresql+asyncpg://insight:insight@localhost:5432/insight"
+    # Explicit DSN. Only for running outside Docker, where you control the whole
+    # string. Left empty, the DSN is built from the parts below — which is safer,
+    # because a password is *data* and must be percent-encoded before it can go
+    # into a URL. A password containing "@" silently truncates the host: the URL
+    # spec splits userinfo from host at the last "@", but libpq and asyncpg split
+    # at the first, so the two disagree and the failure looks like a DNS problem.
+    database_dsn_override: str = Field(
+        default="",
+        # DATABASE_URL stays the name people know and the escape hatch for
+        # running outside Docker.
+        validation_alias=AliasChoices("DATABASE_URL", "DATABASE_DSN_OVERRIDE"),
+    )
+
+    postgres_user: str = "insight"
+    postgres_password: str = "insight"
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "insight"
     redis_url: str = "redis://localhost:6379/0"
     app_secret_key: str = "dev-only-change-me"  # noqa: S105 - overridden by env
     panel_origin: str = "http://localhost:8080"
@@ -92,6 +110,22 @@ class Settings(BaseSettings):
         if len(raw) != 32:
             raise ValueError("ENCRYPTION_KEK must decode to exactly 32 bytes")
         return v
+
+    @property
+    def database_url(self) -> str:
+        """The DSN the application actually connects with.
+
+        Every component is percent-encoded, so a password may contain any
+        character — ``@``, ``/``, ``:``, ``#`` — without corrupting the URL.
+        """
+        if self.database_dsn_override:
+            return self.database_dsn_override
+        user = quote(self.postgres_user, safe="")
+        password = quote(self.postgres_password, safe="")
+        return (
+            f"postgresql+asyncpg://{user}:{password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
 
     @property
     def kek_bytes(self) -> bytes:

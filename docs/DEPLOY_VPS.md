@@ -377,7 +377,7 @@ docker compose logs worker | head -20
 
 | Message | What to do |
 |---|---|
-| `The database host 'postgres' is the correct name, but it does not resolve` **after retrying for 60s** | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
+| `The database host 'postgres' is the correct name, but it does not resolve` **after retrying for 60s** | Historically this was also caused by a `POSTGRES_PASSWORD` containing `@`, which truncated the host for the driver while the diagnostic read it correctly. Fixed — the password is percent-encoded now — but if you see it on an old build, `git pull` first | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
 | `Cannot resolve the database host 'db'` | `DATABASE_URL` is set in `.env` and points at a host that does not exist inside the Docker network. **Delete the line** — Compose sets it for every service. Verify with `docker compose config \| grep DATABASE_URL` |
 | `Postgres rejected the password` | `POSTGRES_PASSWORD` was changed *after* the volume was created. Postgres only applies it when initialising a new data directory. Restore the old password, or `docker compose down -v` to start fresh — **that deletes all data** |
 | `The database is reachable but has no tables yet` | Run `docker compose run --rm api alembic upgrade head` |

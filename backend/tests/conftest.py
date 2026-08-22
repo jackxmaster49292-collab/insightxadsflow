@@ -10,6 +10,7 @@ import base64
 import contextlib
 import os
 import uuid
+from urllib.parse import quote
 from collections.abc import AsyncIterator
 
 import pytest
@@ -22,7 +23,9 @@ os.environ.setdefault("COOKIE_SECURE", "false")
 # Honour POSTGRES_PASSWORD so the suite still runs against a stack started with
 # a custom password. Hardcoding "insight" here meant the tests broke for anyone
 # who followed the deployment guide and set one.
-_PW = os.environ.get("POSTGRES_PASSWORD", "insight")
+# Percent-encode, for the same reason the application does: a password is data,
+# and one containing "@" silently truncates the host.
+_PW = quote(os.environ.get("POSTGRES_PASSWORD", "insight"), safe="")
 os.environ.setdefault(
     "DATABASE_URL", f"postgresql+asyncpg://insight:{_PW}@localhost:5433/insight_test"
 )
