@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     )
 
     postgres_user: str = "insight"
-    postgres_password: str = "insight"
+    postgres_password: str = "insight"  # noqa: S105 - local default, overridden by env
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     postgres_db: str = "insight"
