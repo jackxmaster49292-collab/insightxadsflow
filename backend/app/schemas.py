@@ -52,13 +52,6 @@ class LoginRequest(BaseModel):
     password: Annotated[str, Field(min_length=1, max_length=256)]
 
 
-class TelegramLoginRequest(BaseModel):
-    """Raw ``Telegram.WebApp.initData``. Verified server-side against the admin
-    bot token before it is trusted for anything."""
-
-    init_data: Annotated[str, Field(min_length=1, max_length=8192)]
-
-
 class MeResponse(ApiModel):
     id: uuid.UUID
     email: str

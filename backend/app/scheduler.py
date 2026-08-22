@@ -28,6 +28,8 @@ from app.db.models import (
 )
 from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
+from app.repositories import autoreply as autoreply_repo
+from app.repositories import broadcasts as broadcast_repo
 from app.repositories import jobs as job_repo
 from app.security.ratelimit import close_redis
 from app.services import connections as connection_service
@@ -47,8 +49,14 @@ async def reclaim_loop() -> None:
             async with session_scope() as session:
                 jobs = await job_repo.reclaim_expired(session)
                 tasks = await job_repo.reclaim_expired_control(session)
-            if jobs or tasks:
-                log.info("leases_reclaimed", jobs=jobs, control_tasks=tasks)
+                targets = await broadcast_repo.reclaim_expired(session)
+            if jobs or tasks or targets:
+                log.info(
+                    "leases_reclaimed",
+                    jobs=jobs,
+                    control_tasks=tasks,
+                    broadcast_targets=targets,
+                )
         except Exception as exc:
             log.error("reclaim_failed", error=exc)
         await asyncio.sleep(RECLAIM_INTERVAL_S)
@@ -99,12 +107,16 @@ async def retention_loop() -> None:
                     .returning(AppSession.id)
                 )
                 jobs = await job_repo.purge_terminal(session, older_than_days=30)
+                # Only entries older than any usable cooldown. Purging an
+                # in-force entry would let the same person be answered twice.
+                replies = await autoreply_repo.purge_log(session, older_than_days=30)
             log.info(
                 "retention_applied",
                 events=len(events.all()),
                 idempotency_keys=len(keys.all()),
                 app_sessions=len(sessions.all()),
                 jobs=jobs,
+                auto_reply_log=replies,
             )
         except Exception as exc:
             log.error("retention_failed", error=exc)

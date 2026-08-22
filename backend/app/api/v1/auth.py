@@ -17,13 +17,10 @@ from app.api.deps import (
 from app.api.errors import ApiError
 from app.config import get_settings
 from app.db.models import ForwardingRule, RuleStatus, TelegramConnection
-from app.db.session import session_scope
-from app.repositories import admins as admin_repo
 from app.repositories import events as event_repo
 from app.repositories import users as user_repo
-from app.schemas import LoginRequest, MeResponse, RegisterRequest, TelegramLoginRequest
+from app.schemas import LoginRequest, MeResponse, RegisterRequest
 from app.security import auth
-from app.security.miniapp import InitDataError, verify_init_data
 
 log = structlog.get_logger(__name__)
 router = APIRouter(tags=["auth"])
@@ -88,76 +85,6 @@ async def login(
     set_session_cookies(response, token=token, csrf=secrets.token_urlsafe(24))
     await event_repo.audit(
         session, user_id=user.id, action="user.login", object_type="user", object_id=str(user.id)
-    )
-    return MeResponse(id=user.id, email=user.email, timezone=user.timezone)
-
-
-@router.post("/auth/telegram", dependencies=[rate_limit("login")])
-async def telegram_login(
-    payload: TelegramLoginRequest, request: Request, response: Response, session: SessionDep
-) -> MeResponse:
-    """Sign in from inside a Telegram Mini App.
-
-    Telegram signs the launch payload with a key derived from the bot token, so
-    this is a cryptographic proof of identity rather than a claim from the
-    client. There is no password involved and none is created.
-    """
-    settings = get_settings()
-    try:
-        identity = verify_init_data(
-            payload.init_data,
-            bot_token=settings.admin_bot_token or "",
-            max_age_s=settings.miniapp_max_age_s,
-        )
-    except InitDataError as exc:
-        # The reason is logged, never returned: a precise message would help an
-        # attacker tune a forgery.
-        log.warning("miniapp_auth_rejected", reason=str(exc))
-        raise ApiError(
-            status.HTTP_401_UNAUTHORIZED,
-            "invalid_init_data",
-            "This Telegram session could not be verified. Reopen the panel from the bot.",
-        ) from exc
-
-    # Verified identity is still not authorization. The allowlist decides, and it
-    # is empty by default so a misconfigured deploy is locked, not open.
-    if not settings.is_admin(identity.telegram_user_id):
-        # Written in its own transaction: raising below rolls back the request
-        # session, and a denied-access record must survive the rejection that
-        # caused it.
-        async with session_scope() as audit_session:
-            await event_repo.audit(
-                audit_session,
-                user_id=None,
-                action="admin.access_denied",
-                object_type="telegram_user",
-                object_id=str(identity.telegram_user_id),
-                ip_hash=auth.hash_ip(client_ip(request)),
-            )
-        raise ApiError(
-            status.HTTP_403_FORBIDDEN,
-            "not_an_admin",
-            "This Telegram account is not authorized to use the control panel.",
-        )
-
-    user = await admin_repo.upsert_admin(
-        session,
-        telegram_user_id=identity.telegram_user_id,
-        username=identity.username,
-    )
-    token, _ = await auth.create_session(
-        session,
-        user_id=user.id,
-        ip=client_ip(request),
-        user_agent=request.headers.get("user-agent"),
-    )
-    set_session_cookies(response, token=token, csrf=secrets.token_urlsafe(24))
-    await event_repo.audit(
-        session,
-        user_id=user.id,
-        action="admin.telegram_login",
-        object_type="user",
-        object_id=str(user.id),
     )
     return MeResponse(id=user.id, email=user.email, timezone=user.timezone)
 

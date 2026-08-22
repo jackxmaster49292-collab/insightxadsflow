@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     encryption_kek: str = base64.b64encode(b"0" * 32).decode()
     encryption_kek_version: int = 1
 
-    # --- Admin surface (Telegram bot + Mini App) ----------------------------
+    # --- Admin surface (the Telegram bot) -----------------------------------
     #: The bot that *is* the control panel. Must be a DIFFERENT token from any
     #: forwarding bot: Telegram allows only one getUpdates consumer per token
     #: and a second one receives 409 Conflict.
@@ -60,10 +60,6 @@ class Settings(BaseSettings):
     #: Only these Telegram user ids may use the panel. Empty means nobody —
     #: failing closed, so a misconfigured deploy is locked rather than open.
     admin_telegram_ids: str = ""
-    #: HTTPS origin serving the Mini App. Telegram requires HTTPS.
-    miniapp_url: str = ""
-    #: How long a Mini App launch payload stays valid.
-    miniapp_max_age_s: int = 86_400
 
     # --- Telegram -----------------------------------------------------------
     # "mock" is the default so an unconfigured process can never reach Telegram.
@@ -91,6 +87,28 @@ class Settings(BaseSettings):
     flood_wait_pause_threshold_s: int = 300
     lease_seconds: int = 120
     event_retention_days: int = 90
+
+    # --- Broadcasts ---------------------------------------------------------
+    #: Same fan-out bound as a rule, for the same reason: one broadcast creates
+    #: this many durable rows at once.
+    max_broadcast_targets: int = 500
+    #: Default pacing between two group deliveries of one broadcast. Telegram
+    #: documents ~20 messages per minute to the same group and ~30 messages per
+    #: second overall; 3s keeps a single broadcast well inside both.
+    broadcast_default_delay_ms: int = 3_000
+    #: Longest message body a broadcast may carry. Telegram rejects a text
+    #: message over 4096 characters, and a caption over 1024.
+    max_broadcast_text_len: int = 4_096
+    max_broadcast_caption_len: int = 1_024
+    #: Ceiling on a broadcast image. The admin bot fetches it with getFile, and
+    #: the Bot API refuses to serve a file larger than 20 MB.
+    max_broadcast_media_bytes: int = 5 * 1024 * 1024
+
+    # --- Auto-reply ---------------------------------------------------------
+    #: How long before the same person may receive another automatic reply.
+    #: Not a throttle for our benefit — it is what keeps a reply from becoming
+    #: repeat messaging to someone who did not ask for it.
+    auto_reply_cooldown_s: int = 86_400
 
     # --- Sessions -----------------------------------------------------------
     session_idle_ttl_s: int = 60 * 60 * 12

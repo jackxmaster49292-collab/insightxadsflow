@@ -13,7 +13,7 @@ this document is the reviewable contract it must match.
 - Base path `/api/v1`. JSON only. `snake_case` fields.
 - Auth via `HttpOnly` session cookie. Every endpoint except `/auth/register`, `/auth/login`, and
   `/health` requires authentication.
-- **Telegram identifiers are strings in JSON** (`"peer_id": "-1001234567890"`) so no frontend `Number`
+- **Telegram identifiers are strings in JSON** (`"peer_id": "-1001234567890"`) so no JSON consumer `Number`
   rounding is possible, and always paired with `peer_type`.
 - Pagination is cursor-based: `?limit=50&cursor=<opaque>` → `{"items": [...], "next_cursor": "..."}`.
   `limit` max 200.

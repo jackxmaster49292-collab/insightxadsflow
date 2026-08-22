@@ -1,113 +1,141 @@
-"""Telegram control panel: login, allowlist, screens, and push alerts.
+"""The Telegram control panel: the allowlist, the screens, and push alerts.
 
-The allowlist is the whole security model for this surface — anyone on Telegram
-can message the bot — so it gets adversarial coverage.
+The allowlist is the entire security model for this surface — anyone on Telegram
+can find and message a bot — so it gets adversarial coverage. It used to be
+enforced twice, once in a Mini App login endpoint and once in the bot
+middleware. The Mini App is gone, so the middleware is now the only gate and
+these tests exercise it directly.
 """
 
 from __future__ import annotations
 
-import json
-import time
 import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
+from aiogram.types import CallbackQuery, Chat, Message
+from aiogram.types import User as TgUser
 from sqlalchemy import select
 
 from app.adminbot import views
+from app.adminbot.auth import AdminOnlyMiddleware
 from app.config import get_settings
-from app.db.models import AdminNotification, RuleStatus, User
+from app.db.models import AdminNotification, BroadcastStatus, RuleStatus, User
 from app.repositories import admins as admin_repo
-from app.security.miniapp import build_init_data
 
-BOT_TOKEN = "555000111:AAEadminBotTokenForTestsLongEnough00"
 ADMIN_ID = 900_100_200
 STRANGER_ID = 111_222_333
 
 
 @pytest.fixture(autouse=True)
 def admin_settings(monkeypatch):
-    """Point the app at a known admin bot token and allowlist."""
     settings = get_settings()
-    monkeypatch.setattr(settings, "admin_bot_token", BOT_TOKEN, raising=False)
+    monkeypatch.setattr(settings, "admin_bot_token", "555000111:AAEtoken", raising=False)
     monkeypatch.setattr(settings, "admin_telegram_ids", str(ADMIN_ID), raising=False)
-    monkeypatch.setattr(settings, "miniapp_url", "https://panel.example.com", raising=False)
     return settings
 
 
-def launch(telegram_id: int = ADMIN_ID, *, token: str = BOT_TOKEN) -> str:
-    return build_init_data(
-        {
-            "auth_date": str(int(time.time())),
-            "query_id": "AAHtest",
-            "user": json.dumps({"id": telegram_id, "username": "operator"}),
-        },
-        bot_token=token,
+# --------------------------------------------------------------------------- #
+# Fake aiogram objects
+# --------------------------------------------------------------------------- #
+class CapturingMessage(Message):
+    """A real ``Message``, which is what makes this test meaningful.
+
+    The middleware's rejection path branches on ``isinstance``, so a duck-typed
+    stand-in would take neither branch and the test would pass while the
+    stranger heard nothing. aiogram's models are frozen pydantic, so replies are
+    collected on the class rather than patched onto the instance.
+    """
+
+    replies: ClassVar[list[str]] = []
+
+    async def answer(self, text: str = "", **_kwargs: Any) -> Any:  # type: ignore[override]
+        CapturingMessage.replies.append(text)
+
+
+class CapturingCallback(CallbackQuery):
+    replies: ClassVar[list[str]] = []
+
+    async def answer(self, text: str | None = None, **_kwargs: Any) -> Any:  # type: ignore[override]
+        CapturingCallback.replies.append(text or "")
+
+
+@pytest.fixture(autouse=True)
+def _clear_replies():
+    CapturingMessage.replies.clear()
+    CapturingCallback.replies.clear()
+    yield
+
+
+def a_message() -> CapturingMessage:
+    return CapturingMessage(
+        message_id=1,
+        date=datetime(2026, 1, 1, tzinfo=UTC),
+        chat=Chat(id=ADMIN_ID, type="private"),
     )
 
 
-# --------------------------------------------------------------------------- #
-# Mini App login
-# --------------------------------------------------------------------------- #
-async def test_admin_can_sign_in_from_the_mini_app(client):
-    response = await client.post("/auth/telegram", json={"init_data": launch()})
-    assert response.status_code == 200, response.text
-    assert (await client.get("/me")).status_code == 200
-
-
-async def test_login_creates_a_passwordless_account(client, session):
-    await client.post("/auth/telegram", json={"init_data": launch()})
-    user = (
-        await session.execute(select(User).where(User.telegram_user_id == ADMIN_ID))
-    ).scalar_one()
-    assert user.password_hash is None
-    assert user.telegram_username == "operator"
-
-
-async def test_signing_in_twice_reuses_the_same_account(client, session):
-    await client.post("/auth/telegram", json={"init_data": launch()})
-    await client.post("/auth/logout")
-    await client.post("/auth/telegram", json={"init_data": launch()})
-
-    rows = (
-        (await session.execute(select(User).where(User.telegram_user_id == ADMIN_ID)))
-        .scalars()
-        .all()
+def a_callback() -> CapturingCallback:
+    return CapturingCallback(
+        id="1",
+        from_user=TgUser(id=ADMIN_ID, is_bot=False, first_name="A"),
+        chat_instance="x",
+        data="nav:home",
     )
-    assert len(rows) == 1
 
 
-async def test_verified_but_not_allowlisted_is_refused(client):
-    """Telegram proved who they are — that is still not authorization."""
-    response = await client.post("/auth/telegram", json={"init_data": launch(STRANGER_ID)})
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "not_an_admin"
+async def run_middleware(event: object, telegram_id: int) -> dict:
+    """Push one update through the guard and report what the handler received."""
+    seen: dict = {}
+
+    async def handler(_event: object, data: dict) -> str:
+        seen.update(data)
+        return "handled"
+
+    result = await AdminOnlyMiddleware()(
+        handler,
+        event,  # type: ignore[arg-type]
+        {"event_from_user": TgUser(id=telegram_id, is_bot=False, first_name="Op")},
+    )
+    seen["_result"] = result
+    return seen
 
 
-async def test_payload_signed_by_another_bot_is_refused(client):
-    forged = launch(ADMIN_ID, token="999888777:AAEsomeoneElsesBotTokenLongEnough00")
-    response = await client.post("/auth/telegram", json={"init_data": forged})
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "invalid_init_data"
+# --------------------------------------------------------------------------- #
+# The allowlist
+# --------------------------------------------------------------------------- #
+async def test_an_allowlisted_admin_reaches_the_handler():
+    seen = await run_middleware(a_message(), ADMIN_ID)
+    assert seen["_result"] == "handled"
+    assert isinstance(seen["user_id"], uuid.UUID)
 
 
-async def test_rejection_reason_is_not_disclosed(client):
-    """A precise error would help an attacker tune a forgery."""
-    response = await client.post("/auth/telegram", json={"init_data": "hash=deadbeef"})
-    body = response.json()["error"]
-    assert response.status_code == 401
-    for leak in ("signature", "hmac", "auth_date", "hash"):
-        assert leak not in body["message"].lower()
+async def test_a_stranger_never_reaches_the_handler():
+    seen = await run_middleware(a_message(), STRANGER_ID)
+    assert seen["_result"] is None
+    assert "user_id" not in seen
+    assert CapturingMessage.replies, "the stranger must be told, not silently ignored"
 
 
-async def test_empty_allowlist_locks_everyone_out(client, monkeypatch):
+async def test_a_button_press_is_guarded_too():
+    """A callback_query does not pass through message middleware. Missing this
+    would leave every button in the panel unguarded."""
+    seen = await run_middleware(a_callback(), STRANGER_ID)
+    assert seen["_result"] is None
+    assert CapturingCallback.replies
+
+
+async def test_an_empty_allowlist_locks_everyone_out(monkeypatch):
     """A misconfigured deploy must fail closed, not open."""
     monkeypatch.setattr(get_settings(), "admin_telegram_ids", "", raising=False)
-    response = await client.post("/auth/telegram", json={"init_data": launch()})
-    assert response.status_code == 403
+    seen = await run_middleware(a_message(), ADMIN_ID)
+    assert seen["_result"] is None
 
 
-async def test_denied_attempt_is_audited(client, session):
-    await client.post("/auth/telegram", json={"init_data": launch(STRANGER_ID)})
+async def test_a_denied_attempt_is_audited(session):
+    await run_middleware(a_message(), STRANGER_ID)
     from app.db.models import AuditEvent
 
     rows = (
@@ -120,6 +148,20 @@ async def test_denied_attempt_is_audited(client, session):
         .all()
     )
     assert [r.object_id for r in rows] == [str(STRANGER_ID)]
+
+
+async def test_the_admin_account_is_created_once_and_reused(session):
+    first = await run_middleware(a_message(), ADMIN_ID)
+    second = await run_middleware(a_message(), ADMIN_ID)
+    assert first["user_id"] == second["user_id"]
+
+    rows = (
+        (await session.execute(select(User).where(User.telegram_user_id == ADMIN_ID)))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].password_hash is None, "a Telegram-only admin never gets a password"
 
 
 async def test_a_passwordless_account_cannot_be_logged_into_with_any_password(client, session):
@@ -140,17 +182,6 @@ async def test_a_passwordless_account_cannot_be_logged_into_with_any_password(cl
             "/auth/login", json={"email": "tg-admin@example.com", "password": attempt}
         )
         assert response.status_code == 401, f"password {attempt!r} was accepted"
-
-
-async def test_synthetic_telegram_address_is_not_a_usable_login(client):
-    """Belt and braces: the generated address is non-routable, so the login form
-    rejects it before the password is even considered."""
-    await client.post("/auth/telegram", json={"init_data": launch()})
-    response = await client.post(
-        "/auth/login",
-        json={"email": f"tg-{ADMIN_ID}@telegram.local", "password": "anything-at-all"},
-    )
-    assert response.status_code in {401, 422}
 
 
 # --------------------------------------------------------------------------- #
@@ -184,45 +215,112 @@ def test_is_admin_rejects_unknown_ids(monkeypatch):
 # --------------------------------------------------------------------------- #
 # Screens
 # --------------------------------------------------------------------------- #
+def buttons(screen: views.Screen) -> list[str]:
+    return [b.callback_data or "" for row in screen.keyboard.inline_keyboard for b in row]
+
+
 def test_home_screen_without_a_connection_guides_the_operator():
-    screen = views.home(
-        connections=[], rules=[], counts={}, miniapp_url="https://panel.example.com"
-    )
-    assert "No Telegram connection yet" in screen.text
-    assert any(
-        button.web_app is not None for row in screen.keyboard.inline_keyboard for button in row
-    )
+    screen = views.home(connections=[], rules=[], broadcasts=[], counts={})
+    assert "No Telegram account or bot is connected" in screen.text
+    assert "nav:conns" in buttons(screen), "the next step must be one tap away"
 
 
-def test_mini_app_button_is_hidden_when_not_configured_over_https():
-    """A button that fails when tapped is worse than no button."""
-    screen = views.home(connections=[], rules=[], counts={}, miniapp_url="http://insecure")
-    assert not any(
-        button.web_app is not None for row in screen.keyboard.inline_keyboard for button in row
-    )
+def test_home_screen_offers_ads_and_auto_reply():
+    screen = views.home(connections=[], rules=[], broadcasts=[], counts={})
+    assert "nav:ads:0" in buttons(screen)
+    assert "nav:autoreply" in buttons(screen)
 
 
 def test_markdown_special_characters_in_titles_are_escaped():
     """Chat titles are attacker-influenced; an unescaped one makes Telegram
     reject the whole message with a 400."""
-    escaped = views._esc("*bold* [link](x) _under_ `code` ~s~")
+    escaped = views.escape("*bold* [link](x) _under_ `code` ~s~")
     for char in "*[]()_`~":
         assert f"\\{char}" in escaped
 
 
 def test_callback_data_stays_within_telegram_s_64_byte_limit():
-    rule_id = uuid.uuid4()
+    """Telegram rejects the entire keyboard, not just the offending button, so
+    one long callback breaks a whole screen."""
+    ident = uuid.uuid4()
     for data in (
-        f"rule:{rule_id}",
-        f"rule:{rule_id}:pause",
-        f"rule:{rule_id}:resume",
-        f"rule:{rule_id}:retry",
-        f"rule:{rule_id}:events",
-        f"conn:{rule_id}:sync",
+        f"rule:{ident}",
+        f"rule:{ident}:pause",
+        f"rule:{ident}:resume",
+        f"rule:{ident}:retry",
+        f"rule:{ident}:events",
+        f"rule:{ident}:askdel",
+        f"rule:{ident}:save",
+        f"conn:{ident}:sync",
+        f"conn:{ident}:askdel",
+        f"ad:{ident}:confirm",
+        f"ad:{ident}:discard",
+        f"ad:{ident}:media",
         "nav:rules:99",
         "nav:chats:99",
+        "nav:ads:99",
+        f"{views.PICK}t499",
+        f"{views.PICK}p99",
     ):
         assert len(data.encode()) <= 64, f"{data} is {len(data.encode())} bytes"
+
+
+def test_every_button_the_screens_emit_fits_the_limit():
+    """A guard over the real screens, not a hand-written list — a new button
+    with a long callback should fail here rather than in production."""
+
+    chat = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="A group",
+        access=SimpleNamespace(
+            can_read_source=True,
+            can_post_destination=True,
+            source_reason_code="ok",
+            destination_reason_code="ok",
+        ),
+    )
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Main",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+        telegram_username="me",
+        last_error_message_safe=None,
+    )
+    broadcast = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Ad",
+        status=BroadcastStatus.draft,
+        body_text="hello",
+        media_kind=SimpleNamespace(value="none"),
+        delay_ms=3000,
+        paused_reason_code=None,
+    )
+
+    screens = [
+        views.home(connections=[connection], rules=[], broadcasts=[broadcast], counts={}),
+        views.connections_list(connections=[connection]),
+        views.connection_detail(connection=connection, chat_count=3),
+        views.confirm_disconnect(connection=connection),
+        views.ads_list(broadcasts=[broadcast], page=0, can_create=True),
+        views.ad_compose(broadcast=broadcast, target_count=2, estimate_s=6),
+        views.ad_confirm(broadcast=broadcast, target_count=2, estimate_s=6),
+        views.ad_detail(broadcast=broadcast, counts={"succeeded": 1}, target_count=2),
+        views.group_picker(
+            chats=[chat],
+            selected=set(),
+            page=0,
+            title="Choose groups",
+            hint="Tap to select.",
+            done_callback=f"ad:{broadcast.id}",
+        ),
+        views.chats_list(chats=[chat], page=0),
+        views.autoreply_screen(connection=connection, reply=None),
+    ]
+
+    for screen in screens:
+        for data in buttons(screen):
+            assert len(data.encode()) <= 64, f"{data!r} is {len(data.encode())} bytes"
 
 
 def test_callback_parsing_round_trips():
@@ -242,11 +340,20 @@ def test_rules_list_paginates():
             self.status = RuleStatus.active
 
     rules = [FakeRule(i) for i in range(15)]
-    first = views.rules_list(rules=rules, page=0, miniapp_url="https://p.example.com")
-    assert "Page 1 of 3" in first.text
+    first = views.rules_list(rules=rules, page=0, can_create=True)
+    assert "1/3" in " ".join(b.text for row in first.keyboard.inline_keyboard for b in row)
 
-    last = views.rules_list(rules=rules, page=99, miniapp_url="https://p.example.com")
-    assert "Page 3 of 3" in last.text, "out-of-range pages must clamp, not crash"
+    last = views.rules_list(rules=rules, page=99, can_create=True)
+    assert "3/3" in " ".join(b.text for row in last.keyboard.inline_keyboard for b in row), (
+        "out-of-range pages must clamp, not crash"
+    )
+
+
+def test_creating_is_hidden_until_a_connection_exists():
+    """Offering a button that cannot work is worse than not offering it."""
+    screen = views.ads_list(broadcasts=[], page=0, can_create=False)
+    assert "ad:new" not in buttons(screen)
+    assert "Connect an account first" in screen.text
 
 
 # --------------------------------------------------------------------------- #

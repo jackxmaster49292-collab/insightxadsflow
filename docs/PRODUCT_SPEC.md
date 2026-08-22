@@ -1,18 +1,27 @@
-# Insight Store — Product Specification (Forwarding Only)
+# InsightAdFlow — Product Specification
 
-**Status:** Implemented. No application code written yet.
+**Status:** Implemented.
 **Last updated:** 2026-08-22
 
 ---
 
 ## 1. What this product is
 
-Insight Store is an **automatic Telegram forwarding bot with a minimal web control panel**.
+InsightAdFlow does three things, all controlled from a **Telegram bot** — there is no web panel.
 
-A customer connects a Telegram bot or an authorized Telegram account, picks source chats they are
-allowed to read, picks destination chats they are allowed to post to, creates a forwarding rule, and
-turns it on. From then on, new eligible messages in the sources are forwarded to the destinations
-automatically while the customer is offline.
+**Ads.** The customer writes their own message in the bot, chooses groups the connected account has
+already joined, and sends. Each group receives it once, paced to stay inside Telegram's limits.
+
+**Auto-reply.** When someone messages the connected account — typically after seeing an ad — the bot
+answers them once. It can only ever answer; see §3.1.
+
+**Forwarding.** The customer connects a Telegram bot or an authorized Telegram account, picks source
+chats they are allowed to read, picks destination chats they are allowed to post to, creates a
+forwarding rule, and turns it on. New eligible messages are then forwarded automatically while the
+customer is offline.
+
+The three are deliberately connected: an ad brings people to the account, and the auto-reply meets them
+there, on that same connection.
 
 ## 2. What this product is explicitly not
 
@@ -45,7 +54,28 @@ The system **will not** implement, and I will not add later on request without r
 | Circumventing private-channel access controls | Unauthorized access |
 | **Copying content out of protected/`noforwards` chats** | Content-protection circumvention |
 
-That last row is a design decision worth stating plainly: `copyMessage` can technically reproduce
+### 3.1 Where the ad and auto-reply features stop
+
+Broadcasting and automatic replies are the two features closest to the prohibited list, so the
+boundaries are stated rather than implied — and each is enforced by a guard test, not by review:
+
+| Not built | Why |
+|---|---|
+| Joining a group, importing an invite link | An ad posts only where the account already is |
+| Reading or exporting a member list | Collecting users, and a privacy violation |
+| Any function taking a list of people to message | Unsolicited messaging |
+| Messaging someone who has not written first | Unsolicited messaging |
+| Replying in a group | Posting where nobody asked |
+| Message spinning, randomised text to look human | Anti-detection |
+
+A broadcast target is a **foreign key into synchronized membership**, never a raw peer id or a
+username — so a broadcast cannot address a chat the account was never confirmed to be in.
+
+Auto-reply has exactly one entry point, which takes a single sender that has already messaged the
+account. A per-person cooldown, held in Postgres rather than a cache, means one answer per person per
+window even across a restart.
+
+That last row of the previous table is a design decision worth stating plainly: `copyMessage` can technically reproduce
 content that `forwardMessage` refuses to forward. **We treat that as circumvention.** If a source chat
 reports `has_protected_content` (Bot API) or `noforwards` (MTProto), both forward mode *and* copy mode
 are refused, and the customer sees a clear skip reason.
@@ -64,6 +94,9 @@ skip the delivery and record the reason rather than guessing.
 | **Forwarding rule** | A persistent source→destination automation configuration |
 | **Forwarding job** | One attempt to process one source message for one destination under one rule |
 | **Forwarding event** | A durable record of an outcome: forwarded, skipped, failed, retried, paused |
+| **Broadcast** (shown as **Ad**) | The customer's own message, to be posted to groups they chose |
+| **Broadcast target** | One group of one broadcast: one delivery, one durable row |
+| **Auto-reply** | A stored answer sent to people who message the connection first |
 
 The word **campaign** does not appear in the UI, database, API, or docs.
 
@@ -102,19 +135,42 @@ never silently falls back from one to the other, or between accounts.
 
 ## 6. Customer workflow
 
-1. Log in to the web panel.
-2. Connect a Telegram bot or authorized account.
-3. Synchronize the chats available to that connection.
-4. Choose one or more source chats.
-5. Choose destination chats where posting is authorized.
-6. Create a forwarding rule.
-7. Review the plain-language preview, then turn the rule on.
-8. Leave it running while offline.
-9. Inspect only exceptions, failures, pauses, and basic activity.
+Everything below happens in a chat with the admin bot.
+
+**Setup (once).** Send `/start` → **Accounts → Add account** → name, phone number, login code, 2FA
+password if the account has one → **Sync groups**, which reads the groups the account has already
+joined and records where it may post.
+
+**Posting an ad.** **Ads → New ad** → name → the message → optionally an image → the pause between
+groups → tick the groups → **Send now**. A confirmation screen states the group count, whether an image
+is attached and roughly how long it will take, and says plainly that posted messages cannot be unsent.
+Progress and per-group outcomes are visible while it runs; **Retry** covers groups that did not receive
+it and never re-posts to one that did.
+
+**Auto-reply.** **Auto-reply → Edit reply** → the text → **Turn on**. It cannot be switched on with
+nothing to say.
+
+**Forwarding.** **Forwarding → New rule** → name → the chat to copy from → open the rule to choose the
+groups to copy into → resume it. Then leave it running while offline and inspect only exceptions,
+failures, pauses, and basic activity.
 
 No manual copy, paste, download, upload, or resend at any point.
 
 ## 7. Feature scope
+
+### 7.0 Ads and auto-reply
+
+**Ads.** Text and an optional image. Validated before anything is queued — an empty message, no groups,
+text past Telegram's 4096-character limit (1024 with an image), more than `MAX_BROADCAST_TARGETS`
+groups, or a pause that would push the last delivery past six hours are each refused with a sentence
+that says what to change and by how much. One row per group, so the same group cannot be queued twice.
+Pause, resume, stop and retry are all available while sending; stopping cannot unsend.
+
+The image is stored as **bytes**, not a Telegram `file_id`: a `file_id` is scoped to the bot that
+received it, so the admin bot's id is meaningless to the connection doing the posting (ADR-027).
+
+**Auto-reply.** One per connection: the reply text, an on/off switch, and the waiting period before the
+same person may be answered again. Enabling it with no text is refused.
 
 ### 7.1 Connections
 Secure connect flow per type; login code and 2FA support without ever storing the raw 2FA password;

@@ -21,13 +21,14 @@ import uuid
 import structlog
 
 from app import preflight
-from app.adapters.base import InboundMessage
+from app.adapters.base import InboundMessage, PeerKind, TelegramAdapter
 from app.config import get_settings
 from app.db.models import ConnectionKind, TelegramConnection
 from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
 from app.repositories import connections as connection_repo
 from app.security.ratelimit import close_redis, get_redis
+from app.services import autoreply as autoreply_service
 from app.services import connections as connection_service
 from app.services.dispatch import dispatch_inbound
 
@@ -133,7 +134,7 @@ async def run_connection(connection_id: uuid.UUID) -> None:
             kind = connection.kind
 
         await _restore_cursor(adapter, connection_id, kind)
-        consumer = asyncio.create_task(_consume(connection_id, queue))
+        consumer = asyncio.create_task(_consume(connection_id, queue, adapter))
 
         log.info("listener_started", connection_id=str(connection_id), kind=kind.value)
         async for message in adapter.receive_new_messages():
@@ -165,10 +166,21 @@ async def _restore_cursor(adapter, connection_id: uuid.UUID, kind: ConnectionKin
                 adapter.offset = state.bot_update_offset
 
 
-async def _consume(connection_id: uuid.UUID, queue: asyncio.Queue[InboundMessage]) -> None:
+async def _consume(
+    connection_id: uuid.UUID,
+    queue: asyncio.Queue[InboundMessage],
+    adapter: TelegramAdapter,
+) -> None:
     while True:
         message = await queue.get()
         try:
+            # A private message someone sent us is the only thing that can
+            # trigger an automatic reply, and this is the only place one is
+            # triggered from. Answering happens before dispatch so a slow rule
+            # evaluation does not delay a person waiting on a reply.
+            if message.source.peer_type is PeerKind.user:
+                await _maybe_auto_reply(connection_id, adapter, message)
+
             async with session_scope() as session:
                 result = await dispatch_inbound(
                     session, connection_id=connection_id, message=message
@@ -185,6 +197,31 @@ async def _consume(connection_id: uuid.UUID, queue: asyncio.Queue[InboundMessage
             log.error("dispatch_failed", connection_id=str(connection_id), error=exc)
         finally:
             queue.task_done()
+
+
+async def _maybe_auto_reply(
+    connection_id: uuid.UUID, adapter: TelegramAdapter, message: InboundMessage
+) -> None:
+    """Answer someone who wrote in, if auto-reply is on for this connection.
+
+    A failure here must not stop the message being dispatched — forwarding is
+    the customer's primary configuration, and an auto-reply that could not be
+    sent is not a reason to drop it.
+    """
+    try:
+        async with session_scope() as session:
+            connection = await connection_repo.get_unscoped_for_worker(
+                session, connection_id=connection_id
+            )
+            if connection is None:
+                return
+            decision = await autoreply_service.handle_incoming(
+                session, connection=connection, adapter=adapter, sender=message.source
+            )
+        if decision.sent:
+            log.info("auto_reply_sent", connection_id=str(connection_id))
+    except Exception as exc:
+        log.warning("auto_reply_failed", connection_id=str(connection_id), error=exc)
 
 
 async def run() -> None:

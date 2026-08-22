@@ -16,7 +16,7 @@ decisions, security/reliability notes, known limitations, next step).
 | # | Slice | Deliverable | Done when |
 |---|---|---|---|
 | **0** | Repository & runtime inspection | Complete — see [ARCHITECTURE.md](ARCHITECTURE.md) §1 | ✅ Done |
-| **1** | Scaffold & toolchain | `git init`, Compose stack, `.env.example`, ruff/mypy/pytest/vitest/tsc, `Makefile`, CI skeleton | `make up`, `make test`, all checks pass on an empty suite |
+| **1** | Scaffold & toolchain | `git init`, Compose stack, `.env.example`, ruff/mypy/pytest, `Makefile`, CI skeleton | `make up`, `make test`, all checks pass on an empty suite |
 | **2** | Schema & migrations | All tables from [DATABASE.md](DATABASE.md), Alembic up **and down**, invariant constraints | Migrations round-trip; invariant tests pass |
 | **3** | AuthN/AuthZ | Register, login, logout, `/me`, server-side sessions, `user_id`-scoped repository layer | Cross-user isolation test passes for every existing route |
 | **4** | Adapter interface + `MockAdapter` | `TelegramAdapter` protocol, domain types, `classify_error`, full mock | 100% coverage on `classify_error`; no Telethon/aiogram import outside `adapters/` |
@@ -67,7 +67,7 @@ insightadsflow/
 │   │   ├── security/           # crypto, redaction, sessions, rate limits
 │   │   └── db/                 # models, migrations
 │   └── tests/  unit/ integration/ e2e/
-└── frontend/
+└── docs/
     └── src/  pages/ components/ api/ hooks/
 ```
 

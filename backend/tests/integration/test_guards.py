@@ -118,6 +118,96 @@ def test_no_quota_or_subscription_concepts_exist_in_the_codebase():
     assert not offenders, f"monetization concepts found: {offenders}"
 
 
+#: Things that would turn broadcasting into spam tooling. The product refuses
+#: all of them by design (see the master prompt), so their absence is checked
+#: structurally rather than left to review.
+BANNED_CAPABILITIES = (
+    "join_chat",
+    "joinchannel",
+    "importchatinvite",
+    "add_contacts",
+    "importcontacts",
+    "getparticipants",
+    "get_participants",
+    "scrape",
+    "harvest",
+    "proxy_rotat",
+    "rotate_account",
+    "rotate_proxy",
+    "captcha",
+    "anti_detect",
+    "antidetect",
+    "spintax",
+    "bulk_dm",
+    "mass_dm",
+    "cold_outreach",
+)
+
+
+def test_nothing_in_the_codebase_joins_chats_or_collects_members():
+    """A broadcast posts to groups the account already belongs to.
+
+    Joining a group, importing an invite, or reading a member list would each
+    turn this into a different product — one that reaches people who never
+    opted in. None of them exist, and this makes that greppable.
+    """
+    offenders: list[str] = []
+    for path in APP_DIR.rglob("*.py"):
+        text = path.read_text().lower()
+        for term in BANNED_CAPABILITIES:
+            if term in text:
+                offenders.append(f"{path.relative_to(APP_DIR)}: {term}")
+    assert not offenders, f"spam-enabling capability found: {offenders}"
+
+
+def test_auto_reply_has_no_way_to_address_someone_who_did_not_write_first():
+    """The whole safety argument for auto-reply is that it cannot initiate.
+
+    Its only entry point takes a single sender that already messaged us. A
+    function taking a list of recipients would be unsolicited messaging, so the
+    module's public surface is pinned.
+    """
+    import inspect
+
+    from app.services import autoreply
+
+    public = {
+        name: obj
+        for name, obj in vars(autoreply).items()
+        if not name.startswith("_")
+        and inspect.isfunction(obj)
+        and obj.__module__ == autoreply.__name__
+    }
+    assert set(public) == {"handle_incoming"}, (
+        f"auto-reply gained a new entry point: {sorted(public)}"
+    )
+
+    signature = inspect.signature(public["handle_incoming"])
+    assert "sender" in signature.parameters
+    for name, parameter in signature.parameters.items():
+        annotation = str(parameter.annotation)
+        assert "list" not in annotation.lower(), (
+            f"{name} accepts a collection; auto-reply must answer one sender at a time"
+        )
+
+
+def test_a_broadcast_can_only_target_stored_chats():
+    """Targets are foreign keys into synchronized membership, not raw peer ids.
+
+    A ``peer_id`` column on broadcast_targets would let a broadcast address a
+    chat the account was never confirmed to be in.
+    """
+    from app.db.models import BroadcastTarget
+
+    columns = set(BroadcastTarget.__table__.columns.keys())
+    assert "chat_id" in columns
+    assert "peer_id" not in columns
+    assert "username" not in columns
+
+    chat_fk = next(iter(BroadcastTarget.__table__.c.chat_id.foreign_keys))
+    assert chat_fk.target_fullname == "telegram_chats.id"
+
+
 def test_the_word_campaign_is_not_used(client, actor):
     """Product terminology is binding: rules are never called campaigns."""
     offenders = [

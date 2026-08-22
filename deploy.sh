@@ -49,10 +49,13 @@ if grep -qE '^\s*(DATABASE_URL|REDIS_URL)=' .env; then
   warn "Comment them out unless you run the backend outside Docker."
 fi
 
-if ! grep -qE '^\s*PANEL_DOMAIN=\S' .env; then
-  warn "PANEL_DOMAIN is empty — Caddy will serve plain HTTP on port 80."
-  warn "The Telegram Mini App needs https://, so the full-panel button stays hidden."
-fi
+for required in ADMIN_BOT_TOKEN ADMIN_TELEGRAM_IDS; do
+  value=$(grep -E "^${required}=" .env | cut -d= -f2- || true)
+  [[ -n "$value" ]] || die "$required is empty in .env — the control panel cannot start without it.
+    ADMIN_BOT_TOKEN     from @BotFather (a separate bot from any forwarding bot)
+    ADMIN_TELEGRAM_IDS  your numeric Telegram id, from @userinfobot"
+done
+ok "control panel is configured"
 
 "${COMPOSE[@]}" config -q || die "compose files are invalid (see the error above)"
 ok "compose configuration is valid"
@@ -74,9 +77,30 @@ fi
 # An earlier version of this project used Compose's implicit default network.
 # If that one is still around, containers can end up split across two bridges —
 # and a container on the old one cannot resolve "postgres" on the new one.
-if docker network inspect insight-store_default >/dev/null 2>&1; then
-  warn "removing stale network insight-store_default from an older layout"
-  docker network rm insight-store_default >/dev/null 2>&1 || true
+if docker network inspect insightadflow_default >/dev/null 2>&1; then
+  warn "removing stale network insightadflow_default from an older layout"
+  docker network rm insightadflow_default >/dev/null 2>&1 || true
+fi
+
+# The project was renamed from insight-store to insightadflow. Compose scopes
+# both container names and volumes to the project, so the old stack still holds
+# the ports and the old data volume is invisible to this one. Neither failure
+# explains itself: the first looks like "port already allocated", the second
+# like an empty database.
+if docker ps -aq --filter "label=com.docker.compose.project=insight-store" | grep -q .; then
+  warn "containers from the old 'insight-store' project are still present"
+  warn "they hold the same ports, so this deployment cannot start until they go:"
+  warn "  docker compose -p insight-store down --remove-orphans"
+  die "Remove them, then run ./deploy.sh again."
+fi
+
+if docker volume inspect insight-store_pgdata >/dev/null 2>&1 \
+   && ! docker volume inspect insightadflow_pgdata >/dev/null 2>&1; then
+  warn "found a database volume from the old project name: insight-store_pgdata"
+  warn "this deployment will create a NEW, EMPTY database (insightadflow_pgdata)."
+  warn "Nothing is deleted — the old volume stays untouched — but your existing"
+  warn "connections and rules will not appear until the data is migrated."
+  warn "See docs/DEPLOY_VPS.md, 'Upgrading from a version that had a web panel'."
 fi
 
 say "Starting postgres and redis"
@@ -148,14 +172,16 @@ fi
 
 ok "all services are up"
 
+# Nothing is published to the host in production, so the check runs inside the
+# network — which is also the only place the API is meant to be reachable from.
 say "Health check"
-if curl -fsS --max-time 10 http://localhost/api/v1/health 2>/dev/null; then
+if "${COMPOSE[@]}" exec -T api curl -fsS --max-time 10 http://localhost:8000/api/v1/health 2>/dev/null; then
   echo
-  ok "the panel is responding"
+  ok "the backend is responding"
 else
   echo
-  warn "the health endpoint did not respond through Caddy"
-  warn "check: ${COMPOSE[*]} logs caddy"
+  warn "the health endpoint did not respond"
+  warn "check: ${COMPOSE[*]} logs api"
 fi
 
 echo

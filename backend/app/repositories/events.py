@@ -22,10 +22,11 @@ from app.security.redaction import scrub_text
 async def record(
     session: AsyncSession,
     *,
-    rule_id: uuid.UUID,
     connection_id: uuid.UUID,
     outcome: EventOutcome,
     reason_code: str,
+    rule_id: uuid.UUID | None = None,
+    broadcast_id: uuid.UUID | None = None,
     job_id: uuid.UUID | None = None,
     source_chat_id: uuid.UUID | None = None,
     source_message_ids: Sequence[int] = (),
@@ -33,9 +34,18 @@ async def record(
     attempt: int = 0,
     detail: str | None = None,
 ) -> ForwardingEvent:
-    """``detail_safe`` is redacted at write time — it is the only field the UI shows."""
+    """``detail_safe`` is redacted at write time — it is the only field the UI shows.
+
+    Exactly one of ``rule_id`` / ``broadcast_id`` identifies the origin. The
+    database enforces that too; checking here as well turns a caller's mistake
+    into a readable error instead of an IntegrityError from three frames away.
+    """
+    if (rule_id is None) == (broadcast_id is None):
+        raise ValueError("an event belongs to exactly one of a rule or a broadcast")
+
     event = ForwardingEvent(
         rule_id=rule_id,
+        broadcast_id=broadcast_id,
         job_id=job_id,
         connection_id=connection_id,
         source_chat_id=source_chat_id,
@@ -92,6 +102,25 @@ async def list_recent_for_user(
         stmt = stmt.where(ForwardingEvent.outcome == EventOutcome(outcome))
     stmt = stmt.order_by(ForwardingEvent.occurred_at.desc()).limit(limit).offset(offset)
     result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_for_broadcast(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    broadcast_id: uuid.UUID,
+    limit: int = 50,
+) -> list[ForwardingEvent]:
+    from app.db.models import Broadcast
+
+    result = await session.execute(
+        select(ForwardingEvent)
+        .join(Broadcast, Broadcast.id == ForwardingEvent.broadcast_id)
+        .where(ForwardingEvent.broadcast_id == broadcast_id, Broadcast.user_id == user_id)
+        .order_by(ForwardingEvent.occurred_at.desc())
+        .limit(limit)
+    )
     return list(result.scalars().all())
 
 

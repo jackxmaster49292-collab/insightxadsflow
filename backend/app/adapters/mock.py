@@ -158,6 +158,41 @@ class MockAdapter:
         self.script.next_destination_message_id += 1
         return DeliveryReceipt(destination_message_id=self.script.next_destination_message_id)
 
+    async def send_text(
+        self,
+        destination: ChatRef,
+        text: str,
+        *,
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        self.script.record("send_text", destination, text, random_id=random_id)
+        self._maybe_raise(destination)
+        self.script.next_destination_message_id += 1
+        return DeliveryReceipt(destination_message_id=self.script.next_destination_message_id)
+
+    async def send_photo(
+        self,
+        destination: ChatRef,
+        photo: bytes,
+        *,
+        caption: str = "",
+        filename: str = "image.jpg",
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        # Records the byte count, not the bytes: a failing test should print a
+        # readable diff, not a megabyte of binary.
+        self.script.record(
+            "send_photo",
+            destination,
+            len(photo),
+            caption=caption,
+            filename=filename,
+            random_id=random_id,
+        )
+        self._maybe_raise(destination)
+        self.script.next_destination_message_id += 1
+        return DeliveryReceipt(destination_message_id=self.script.next_destination_message_id)
+
     # --- misc ------------------------------------------------------------ #
     def classify_error(self, exc: BaseException) -> ClassifiedError:
         return classify_error(exc)

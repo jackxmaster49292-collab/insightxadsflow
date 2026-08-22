@@ -36,7 +36,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="Insight Store — Telegram Forwarding Bot",
+        title="InsightAdFlow — Telegram Forwarding Bot",
         version="0.1.0",
         description=(
             "Automatic Telegram forwarding between authorized chats. "

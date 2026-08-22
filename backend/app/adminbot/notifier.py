@@ -29,9 +29,9 @@ POLL_INTERVAL_S = 5
 
 
 def _escape(text: str) -> str:
-    from app.adminbot.views import _esc
+    from app.adminbot.views import escape
 
-    return _esc(text)
+    return escape(text)
 
 
 async def drain_once(bot: Bot) -> int:

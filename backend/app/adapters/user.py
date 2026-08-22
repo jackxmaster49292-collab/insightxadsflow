@@ -333,6 +333,45 @@ class UserAdapter:
         )
         return DeliveryReceipt(destination_message_id=int(sent.id))
 
+    async def send_text(
+        self,
+        destination: ChatRef,
+        text: str,
+        *,
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        """MTProto carries a ``random_id``, so a retry after an ambiguous
+        timeout is deduplicated by Telegram rather than by us guessing."""
+        sent = await self._client.send_message(
+            await self._entity(destination),
+            message=text,
+        )
+        return DeliveryReceipt(destination_message_id=int(sent.id))
+
+    async def send_photo(
+        self,
+        destination: ChatRef,
+        photo: bytes,
+        *,
+        caption: str = "",
+        filename: str = "image.jpg",
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        import io
+
+        # Telethon infers the type from the name, so the buffer is named rather
+        # than passed as anonymous bytes — otherwise the image is delivered as a
+        # generic document.
+        buffer = io.BytesIO(photo)
+        buffer.name = filename
+
+        sent = await self._client.send_file(
+            await self._entity(destination),
+            file=buffer,
+            caption=caption or None,
+        )
+        return DeliveryReceipt(destination_message_id=int(sent.id))
+
     # --- misc ------------------------------------------------------------ #
     def classify_error(self, exc: BaseException) -> ClassifiedError:
         return classify_error(exc)

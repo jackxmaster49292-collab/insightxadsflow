@@ -1,4 +1,4 @@
-name: insight-store
+name: insightadflow
 
 x-backend: &backend
   build:
@@ -57,10 +57,13 @@ services:
     restart: unless-stopped
     networks: [insight]
 
+  # Internal only. The control panel is the Telegram bot; this serves the health
+  # endpoint and is the process migrations are run through. Bound to loopback so
+  # a development machine can curl it without exposing it on the network.
   api:
     <<: *backend
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
 
   # Intake. Scales horizontally: a Redis lock per connection guarantees only one
   # listener opens a client for a given connection.
@@ -97,14 +100,6 @@ services:
       disable: true
     deploy:
       replicas: 1
-
-  frontend:
-    build:
-      context: ./frontend
-    ports: ["8080:80"]
-    depends_on: [api]
-    restart: unless-stopped
-    networks: [insight]
 
 # One explicit network for everything. Compose would create a default anyway,
 # but naming it makes the guarantee visible: every service resolves every other

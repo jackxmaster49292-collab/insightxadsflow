@@ -44,13 +44,13 @@ Target Bot API level: **10.2** (current).
 
 | Component | Responsibility |
 |---|---|
-| **Web dashboard** (Vite + React + TS) | Minimal rule and connection management UI |
-| **API service** (FastAPI) | AuthN/AuthZ, CRUD, validation, control commands |
+| **Admin bot** (aiogram) | **The control panel.** Every screen and every flow, plus the alert outbox drain |
+| **API service** (FastAPI) | Internal: the service layer the tests drive, plus the health endpoint. Not published |
 | **Telegram adapter** | Encapsulates Bot API / MTProto behind one testable interface |
-| **Listener** | Detects new messages from active source chats |
+| **Listener** | Detects new messages from active source chats, and sends an auto-reply to a private one |
 | **Scheduler** | Releases due jobs, reclaims leases, runs health checks, evaluates safety pauses |
-| **Forwarding workers** | Execute delivery jobs with bounded concurrency, leases, retry classification, safe shutdown |
-| **PostgreSQL 18** | Source of truth: users, connections, chats, rules, jobs, events, state |
+| **Forwarding workers** | Execute forwarding jobs *and* broadcast targets with bounded concurrency, leases, retry classification, safe shutdown |
+| **PostgreSQL 18** | Source of truth: users, connections, chats, rules, jobs, broadcasts, auto-replies, events, state |
 | **Redis 8** | Queue coordination, short-lived locks, rate-limit counters, transient state |
 | **Private object storage** | *Optional*, only if media staging proves necessary — **not in MVP** |
 | **Observability** | Structured JSON logs, metrics, health checks, error tracking |
@@ -120,8 +120,9 @@ class TelegramAdapter(Protocol):
 
 Rules: no Telegram-specific types cross this boundary — `ChatRef`, `InboundMessage`, `DeliveryReceipt`,
 and `ErrorClass` are our own. No Telethon or aiogram import exists outside `adapters/`. No
-Telegram-specific code in the frontend or in unrelated backend modules. Unit and integration tests run
-entirely against `MockAdapter`.
+Telegram-specific code in unrelated backend modules — enforced by an AST guard test that allows the
+imports only inside `adapters/` and `adminbot/`. Unit and integration tests run entirely against
+`MockAdapter`.
 
 ### 4.1 `ChatRef` and the peer-identity problem
 
@@ -130,7 +131,7 @@ channels overlap, so you must use separate tables/hashmaps"**. Therefore:
 
 - `ChatRef = (peer_type, peer_id)` — never `peer_id` alone, anywhere.
 - `peer_id` is `BIGINT` in Postgres, `int` in Python, and **serialized as a JSON string** in the API so
-  no frontend `Number` rounding is possible.
+  no JSON consumer can round it through a float.
 - MTProto `access_hash` is **per-account**, so it is stored per connection, encrypted, and is never
   shared between connections or exposed through the API.
 

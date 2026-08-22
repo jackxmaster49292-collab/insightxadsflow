@@ -28,7 +28,7 @@
 | T8 | Queue message tampering | Forged deliveries | Jobs live in Postgres, not in the queue payload; Redis carries only job ids; Redis is never exposed |
 | T9 | Abuse of the forwarding service (spam relay) | Platform harm, bans | Authorization revalidation, protected-content refusal, safety pause, audit trail, ToS acceptance |
 | T10 | SSRF | Internal network access | No user-supplied URL is ever fetched server-side |
-| T11 | XSS | Session theft | React auto-escaping, no `dangerouslySetInnerHTML`, strict CSP, message content rendered as text |
+| T11 | Injected markup in a chat title | A screen Telegram refuses to render, or misleading formatting | Every interpolated value is MarkdownV2-escaped; a checker renders every screen in the test suite and fails on an unescaped special character |
 | T12 | CSRF | Forced state change | `SameSite=Strict` cookies + double-submit token on mutations |
 | T13 | SQL injection | Data breach | SQLAlchemy parameterized queries only; no string-built SQL |
 | T14 | Insecure file handling | RCE / traversal | No media staging in MVP; if added, private storage + signed expiring URLs + content-type allowlist |

@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Insight Store — Telegram Forwarding Bot
+  title: InsightAdFlow — Telegram Forwarding Bot
   description: Automatic Telegram forwarding between authorized chats. No quotas,
     no subscription limits — and no evasion of Telegram's own limits.
   version: 0.1.0
@@ -41,39 +41,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/LoginRequest'
-        required: true
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MeResponse'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-  /api/v1/auth/telegram:
-    post:
-      tags:
-      - auth
-      summary: Telegram Login
-      description: 'Sign in from inside a Telegram Mini App.
-
-
-        Telegram signs the launch payload with a key derived from the bot token, so
-
-        this is a cryptographic proof of identity rather than a claim from the
-
-        client. There is no password involved and none is created.'
-      operationId: telegram_login_api_v1_auth_telegram_post
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TelegramLoginRequest'
         required: true
       responses:
         '200':
@@ -1595,7 +1562,7 @@ components:
             type: string
             format: uuid
           type: array
-          maxItems: 50
+          maxItems: 1000
           minItems: 1
           title: Source Chat Ids
         destination_chat_ids:
@@ -1603,7 +1570,7 @@ components:
             type: string
             format: uuid
           type: array
-          maxItems: 200
+          maxItems: 2000
           minItems: 1
           title: Destination Chat Ids
         forward_mode:
@@ -1678,21 +1645,6 @@ components:
       - label
       - phone
       title: StartUserConnectionRequest
-    TelegramLoginRequest:
-      properties:
-        init_data:
-          type: string
-          maxLength: 8192
-          minLength: 1
-          title: Init Data
-      type: object
-      required:
-      - init_data
-      title: TelegramLoginRequest
-      description: 'Raw ``Telegram.WebApp.initData``. Verified server-side against
-        the admin
-
-        bot token before it is trusted for anything.'
     TwoFactorRequest:
       properties:
         password:

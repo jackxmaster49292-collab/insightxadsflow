@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.models import (
+    Broadcast,
+    BroadcastStatus,
     ConnectionStatus,
     EventOutcome,
     ForwardingRule,
@@ -28,6 +30,7 @@ from app.db.models import (
 )
 from app.domain import reasons
 from app.repositories import admins as admin_repo
+from app.repositories import broadcasts as broadcast_repo
 from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
 
@@ -97,7 +100,27 @@ async def pause_connection(
             reason_code=reason_code,
         )
 
+    # Every broadcast on this connection stops too, for the same reason: firing
+    # at a revoked session produces nothing but errors.
+    sending = await session.execute(
+        select(Broadcast).where(
+            Broadcast.connection_id == connection.id,
+            Broadcast.status == BroadcastStatus.sending,
+        )
+    )
+    for broadcast in sending.scalars().all():
+        broadcast.status = BroadcastStatus.paused
+        broadcast.paused_reason_code = reason_code
+        await event_repo.record(
+            session,
+            broadcast_id=broadcast.id,
+            connection_id=connection.id,
+            outcome=EventOutcome.paused,
+            reason_code=reason_code,
+        )
+
     await job_repo.cancel_pending_for_connection(session, connection_id=connection.id)
+    await broadcast_repo.cancel_pending_for_connection(session, connection_id=connection.id)
 
     await admin_repo.notify(
         session,
@@ -125,6 +148,16 @@ async def note_failure(
     recent = await job_repo.count_recent_failures(session, rule_id=rule_id)
     if recent >= settings.safety_pause_threshold:
         await pause_rule(session, rule_id=rule_id, reason_code=reasons.SAFETY_PAUSE)
+
+
+async def note_connection_failure(session: AsyncSession, *, connection: TelegramConnection) -> None:
+    """Count a serious failure that has no rule behind it.
+
+    A broadcast target's dead letter is still evidence the connection may be
+    unhealthy, but there is no rule to pause — so only the counter moves, and
+    the connection-level guards act on it.
+    """
+    connection.consecutive_failure_count += 1
 
 
 async def clear_failures(connection: TelegramConnection) -> None:

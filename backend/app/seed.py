@@ -128,14 +128,19 @@ async def seed() -> None:
     print("\n" + "=" * 68)
     print("  Demo data ready (mock Telegram provider — nothing real is contacted)")
     print("=" * 68)
-    print("  Panel     http://localhost:8080")
-    print(f"  Email     {DEMO_EMAIL}")
-    print(f"  Password  {password}")
+    print(f"  Connection  {connection.id}")
     print(
-        f"\n  1 connection, {report.discovered} chats, 1 draft rule "
-        f"({len(DESTINATION_PEERS)} destinations)."
+        f"  Contents    1 connection, {report.discovered} chats, 1 draft rule "
+        f"({len(DESTINATION_PEERS)} destinations)"
     )
-    print("  Activate the rule in the panel, then run `make worker` to process jobs.")
+    # The account exists so the HTTP layer has something to authenticate; the
+    # control panel is the Telegram bot and does not use it.
+    print(f"\n  API login   {DEMO_EMAIL} / {password}")
+    print("\n  Try a broadcast through the real delivery path:")
+    print(f"    docker compose exec api python -m app.devtools ad {connection.id}")
+    print("\n  Or inject a source message to exercise forwarding:")
+    print(f"    docker compose exec api python -m app.devtools emit {connection.id}")
+    print("\n  Then:  docker compose logs -f worker")
     print("=" * 68 + "\n")
 
     await dispose_engine()

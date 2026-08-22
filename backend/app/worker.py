@@ -21,6 +21,7 @@ import structlog
 from app import preflight
 from app.config import get_settings
 from app.db.models import (
+    BroadcastTarget,
     ControlTask,
     ControlTaskKind,
     ControlTaskStatus,
@@ -29,9 +30,11 @@ from app.db.models import (
 )
 from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
+from app.repositories import broadcasts as broadcast_repo
 from app.repositories import connections as connection_repo
 from app.repositories import jobs as job_repo
 from app.security.ratelimit import close_redis, connection_bucket, destination_bucket
+from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
 from app.services import delivery, sync
 
@@ -104,6 +107,68 @@ async def _heartbeat(job_id: uuid.UUID) -> None:
         async with session_scope() as session:
             await job_repo.heartbeat(
                 session, job_id=job_id, owner=WORKER_ID, lease_seconds=settings.lease_seconds
+            )
+
+
+async def process_broadcast_target(target_ref: BroadcastTarget) -> None:
+    """Post one broadcast to one group.
+
+    Structurally identical to :func:`process_job` — same pacing, same lease
+    heartbeat, same adapter lifecycle — because the guarantees a broadcast needs
+    are the guarantees forwarding needs.
+    """
+    settings = get_settings()
+    target_id = target_ref.id
+
+    async with session_scope() as session:
+        target = await session.get(BroadcastTarget, target_id)
+        if target is None:
+            return
+        broadcast = await broadcast_repo.get_unscoped_for_worker(
+            session, broadcast_id=target.broadcast_id
+        )
+        if broadcast is None:
+            return
+        connection = await connection_repo.get_unscoped_for_worker(
+            session, connection_id=broadcast.connection_id
+        )
+        if connection is None:
+            return
+
+        chat = await delivery._load_chat(session, target.chat_id)
+        if chat is not None:
+            await _pace(broadcast.connection_id, chat)
+
+        adapter = await connection_service.adapter_for(session, connection)
+        heartbeat = asyncio.create_task(_broadcast_heartbeat(target.id))
+        try:
+            outcome = await broadcast_service.execute_target(
+                session, target=target, adapter=adapter, connection=connection
+            )
+            log.info(
+                "broadcast_target_processed",
+                target_id=str(target.id),
+                broadcast_id=str(broadcast.id),
+                status=outcome.status.value,
+                reason_code=outcome.reason_code,
+            )
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+            if settings.live_telegram:
+                with contextlib.suppress(Exception):
+                    await adapter.disconnect()
+
+
+async def _broadcast_heartbeat(target_id: uuid.UUID) -> None:
+    settings = get_settings()
+    interval = max(5, settings.lease_seconds // 3)
+    while True:
+        await asyncio.sleep(interval)
+        async with session_scope() as session:
+            await broadcast_repo.heartbeat(
+                session, target_id=target_id, owner=WORKER_ID, lease_seconds=settings.lease_seconds
             )
 
 
@@ -197,6 +262,17 @@ async def run() -> None:
                 claimed_any = True
                 running.add(asyncio.create_task(guarded(process_job(job))))
 
+        # Broadcasts share the same worker pool and the same per-connection
+        # in-flight budget. Claiming them after forwarding jobs means a large
+        # broadcast cannot starve the forwarding a customer set up first.
+        capacity = settings.worker_concurrency - len(running)
+        if capacity > 0:
+            async with session_scope() as session:
+                targets = await _claim_broadcasts_within_limits(session, capacity)
+            for target in targets:
+                claimed_any = True
+                running.add(asyncio.create_task(guarded(process_broadcast_target(target))))
+
         running = {task for task in running if not task.done()}
         if not claimed_any:
             # Backpressure-friendly idle. A pub/sub wake-up is a V1 optimization.
@@ -233,6 +309,54 @@ async def _claim_within_limits(session, capacity: int) -> list[ForwardingJob]:  
             continue
         per_connection[job.connection_id] = in_flight + 1
         accepted.append(job)
+    return accepted
+
+
+async def _claim_broadcasts_within_limits(session, capacity: int) -> list[BroadcastTarget]:  # type: ignore[no-untyped-def]
+    """Claim broadcast targets, respecting the same per-connection in-flight cap.
+
+    The cap counts forwarding jobs *and* broadcast targets together. Counting
+    them separately would let one connection run twice its budget simply by
+    doing both at once, which is what the limit exists to prevent.
+    """
+    settings = get_settings()
+    targets = await broadcast_repo.claim_batch(
+        session, owner=WORKER_ID, limit=capacity, lease_seconds=settings.lease_seconds
+    )
+    if not targets:
+        return []
+
+    # One lookup per broadcast, since every target of a broadcast shares its
+    # connection.
+    connection_of: dict[uuid.UUID, uuid.UUID] = {}
+    accepted: list[BroadcastTarget] = []
+    per_connection: dict[uuid.UUID, int] = {}
+
+    for target in targets:
+        connection_id = connection_of.get(target.broadcast_id)
+        if connection_id is None:
+            broadcast = await broadcast_repo.get_unscoped_for_worker(
+                session, broadcast_id=target.broadcast_id
+            )
+            if broadcast is None:
+                target.status = JobStatus.skipped
+                continue
+            connection_id = broadcast.connection_id
+            connection_of[target.broadcast_id] = connection_id
+
+        in_flight = per_connection.get(connection_id)
+        if in_flight is None:
+            in_flight = await job_repo.in_flight_count(
+                session, connection_id=connection_id
+            ) + await broadcast_repo.in_flight_count(session, connection_id=connection_id)
+        if in_flight >= settings.per_connection_inflight:
+            # Backpressure: release the lease rather than hold one we will not act on.
+            target.status = JobStatus.pending
+            target.lease_owner = None
+            target.lease_expires_at = None
+            continue
+        per_connection[connection_id] = in_flight + 1
+        accepted.append(target)
     return accepted
 
 

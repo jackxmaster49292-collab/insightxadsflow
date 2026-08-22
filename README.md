@@ -1,22 +1,32 @@
-# Insight Store — Telegram Forwarding Bot
+# InsightAdFlow — Telegram ads, auto-reply and forwarding
 
-Automatically forward messages from Telegram chats you are **authorized to read** to Telegram chats you
-are **authorized to post in**, with a minimal web control panel.
+Post your own message to Telegram groups you have **already joined**, answer people who message you
+first, and automatically forward messages between chats you are **authorized to read and post in** —
+all from a Telegram bot. There is no website to host.
 
-> **Status: implemented.** FastAPI + Telethon/aiogram backend, React control panel, PostgreSQL and
-> Redis, all running under Docker Compose. Telegram is **fully mocked by default** — nothing contacts
-> real Telegram servers unless you set `TELEGRAM_PROVIDER=live`.
+> **Status: implemented.** FastAPI + Telethon/aiogram backend, PostgreSQL and Redis under Docker
+> Compose, controlled entirely through a Telegram bot. Telegram is **fully mocked by default** —
+> nothing contacts real Telegram servers unless you set `TELEGRAM_PROVIDER=live`.
 
 ---
 
 ## What it does
 
-Connect a Telegram bot or an authorized Telegram account → synchronize your chats → pick sources and
-destinations → create a forwarding rule → turn it on. New eligible messages are then forwarded
-automatically in the background while you are offline. You only need to look at the panel to check
-exceptions, failures, and pauses.
+Three things, all driven from a chat with your own admin bot:
 
-No manual copy, paste, download, upload, or resend.
+**Ads.** Write a message in the bot, pick the groups, send. It posts to each group in turn, paced to
+stay inside Telegram's limits, and tells you exactly which groups received it and which did not.
+
+**Auto-reply.** Someone sees the ad and messages your account; the bot answers them. It can only ever
+answer — there is no recipient list and no way to make one, and one person is answered once per
+waiting period.
+
+**Forwarding.** Connect a bot or an account → synchronize your chats → pick sources and destinations →
+create a rule → turn it on. New eligible messages are forwarded in the background while you are
+offline.
+
+No manual copy, paste, download, upload, or resend. No web panel, no domain, no TLS certificate: the
+stack only makes outbound connections.
 
 ## What it is not
 
@@ -36,6 +46,12 @@ This tool respects Telegram. It **will not** help you evade it.
   implemented.
 - It contains no anti-detection behaviour, no restriction evasion, no account or proxy rotation, no
   CAPTCHA bypass, no scraping, and no unsolicited messaging.
+- An ad posts **only** to groups the connected account has already joined. Nothing here joins a group,
+  reads a member list, or imports an invite link — and a guard test fails the build if such code
+  appears.
+- Auto-reply **only ever answers someone who messaged you first**. It has one entry point, it refuses
+  group chats outright, and a guard test pins that surface so a "message everyone" function cannot be
+  added quietly.
 - **Telegram can still restrict your bot or your personal account.** Misuse is your responsibility, and
   this software will not help you evade the consequences. Using an MTProto user-account connection
   carries meaningfully more risk than a bot connection — prefer a bot wherever it suffices.
@@ -86,13 +102,14 @@ python3 -c "import base64,os;print('ENCRYPTION_KEK='+base64.b64encode(os.urandom
 
 Paste that into `.env`, then bring up the whole stack:
 
+Set `ADMIN_BOT_TOKEN` (a bot from @BotFather) and `ADMIN_TELEGRAM_IDS` (your numeric id, from
+@userinfobot) in the same file, then bring up the whole stack:
+
 ```bash
-docker compose up -d --build
-docker compose run --rm api alembic upgrade head
-docker compose exec api python -m app.seed
+./deploy.sh
 ```
 
-Panel at `http://localhost:8080`; `make seed` prints the demo credentials.
+Send `/start` to your bot — that is the panel. Nothing is published to the internet.
 
 To exercise forwarding without Telegram, inject a message through the real dispatch path — the same
 code the listener calls:
@@ -124,38 +141,42 @@ you obtain from [my.telegram.org](https://my.telegram.org), are documented in
 messages from channels where they are a member) and grant post rights in each destination. For groups,
 either make it an admin or disable privacy mode, or it will only see commands and replies.
 
-**User account:** get an `api_id` and `api_hash` from my.telegram.org, then connect with your phone
-number, the login code, and your 2FA password if you have one. Your 2FA password is used once in memory
+**User account:** get an `api_id` and `api_hash` from my.telegram.org, then connect in the bot with
+your phone number, the login code, and your 2FA password if you have one. Send the login code with
+spaces between the digits (`1 2 3 4 5`) — Telegram cancels a code it sees posted as plain digits in a
+chat, and the prompt explains why. Your 2FA password is used once in memory
 to complete sign-in and is **never stored, hashed, or logged**. Session material is encrypted at rest
 with envelope encryption and can be revoked from the panel, which also calls `auth.logOut` so Telegram
 invalidates it server-side.
 
 ## Managing it from Telegram
 
-The admin panel runs inside Telegram. A dedicated bot gives you status,
-pause/resume, retry and activity through inline buttons — and **pushes an alert**
-when a rule or connection auto-pauses. A *full panel* button opens the same React
-panel inside Telegram for connecting accounts and editing rules.
-
-No bot token, phone number, login code or 2FA password is ever typed into a
-Telegram chat; those are entered in the Mini App over HTTPS. Setup and the full
-security model are in [docs/TELEGRAM_PANEL.md](docs/TELEGRAM_PANEL.md).
+The bot is the whole admin surface: connecting an account by phone number,
+composing an ad, picking groups, writing the auto-reply, and managing forwarding
+rules are all conversations with it. It also **pushes an alert** when a rule or
+connection auto-pauses, rather than waiting for you to look.
 
 ```bash
-ADMIN_BOT_TOKEN=123456789:AA...          # a SEPARATE bot from any forwarding bot
-ADMIN_TELEGRAM_IDS=123456789             # empty means nobody — fails closed
-MINIAPP_URL=https://panel.example.com    # Telegram requires https
+ADMIN_BOT_TOKEN=123456789:AA...   # a SEPARATE bot from any forwarding bot
+ADMIN_TELEGRAM_IDS=123456789      # empty means nobody — fails closed
 ```
+
+Credentials — bot tokens, phone numbers, login codes, 2FA passwords — are typed
+into the chat, because that is where the panel is. Every prompt says so first,
+the message is deleted the instant it is read, and the value never reaches
+conversation state, a log, or the database. Telegram still held it briefly, which
+is why **rotating your bot token after setup is worth doing**. The full tradeoff
+is written up in [docs/TELEGRAM_PANEL.md](docs/TELEGRAM_PANEL.md) §6 and ADR-024.
 
 ## How it fits together
 
 | Process | Role |
 |---|---|
-| `api` | FastAPI. Authentication, CRUD, validation, control commands. **Never blocks on Telegram** — every command enqueues durable work and returns `202`. |
-| `listener` | Reads new messages. One Redis lock per connection, so only one process ever opens a client for a given connection. |
-| `worker` | Claims due jobs with `SELECT … FOR UPDATE SKIP LOCKED`, delivers them, and heartbeats a lease so a crash returns the work rather than losing it. |
+| `api` | FastAPI, internal only. The service layer the tests drive, plus the health endpoint. **Never blocks on Telegram** — every command enqueues durable work and returns `202`. |
+| `listener` | Reads new messages, and answers a private one when auto-reply is on. One Redis lock per connection, so only one process ever opens a client for a given connection. |
+| `worker` | Claims due forwarding jobs and broadcast targets with `SELECT … FOR UPDATE SKIP LOCKED`, delivers them, and heartbeats a lease so a crash returns the work rather than losing it. |
 | `scheduler` | Reclaims expired leases, runs health checks, enforces retention. Exactly one instance. |
-| `adminbot` | The Telegram control panel and alert sender. Exactly one instance — Telegram allows one `getUpdates` consumer per token. |
+| `adminbot` | **The control panel.** Every screen and every flow. Also drains the alert outbox. Exactly one instance — Telegram allows one `getUpdates` consumer per token. |
 | `postgres` | Source of truth for everything, including the job queue. |
 | `redis` | Coordination only — locks, pacing buckets, rate limits. Losing it loses nothing durable. |
 
@@ -163,8 +184,8 @@ MINIAPP_URL=https://panel.example.com    # Telegram requires https
 
 | Doc | Contents |
 |---|---|
-| [DEPLOY_VPS.md](docs/DEPLOY_VPS.md) | **Step-by-step VPS deployment** — hardening, Docker, database, HTTPS, backups |
-| [TELEGRAM_PANEL.md](docs/TELEGRAM_PANEL.md) | **Managing everything from inside Telegram** — bot, Mini App, setup, security |
+| [DEPLOY_VPS.md](docs/DEPLOY_VPS.md) | **Step-by-step VPS deployment** — hardening, Docker, database, backups |
+| [TELEGRAM_PANEL.md](docs/TELEGRAM_PANEL.md) | **The control panel** — ads, auto-reply, forwarding, setup, security |
 | [PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) | Scope, safety boundary, terminology, features, MVP definition |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Integration choice, library verification, components, intake, queue |
 | [SECURITY.md](docs/SECURITY.md) | Threat model, envelope encryption, isolation, redaction, abuse posture |

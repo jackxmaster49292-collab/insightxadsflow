@@ -68,7 +68,7 @@ One test, executed against the real stack with `MockAdapter`, covering the full 
 ## 5. Tooling and gates
 
 `pytest` + `pytest-asyncio` + `testcontainers` (real Postgres and Redis, mocked Telegram) for the
-backend; `vitest` + React Testing Library for the frontend; `ruff` (lint + format), `mypy --strict`, and
+backend; `ruff` (lint + format), `mypy --strict`, and
 `tsc --noEmit` for static checks.
 
 CI runs, in order: lint → type check → migrations up **and down** → unit → integration → e2e → build →

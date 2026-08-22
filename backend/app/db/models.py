@@ -119,6 +119,27 @@ class EventOutcome(enum.StrEnum):
     paused = "paused"
 
 
+class BroadcastStatus(enum.StrEnum):
+    """A broadcast is composed, then queued, then drained.
+
+    ``draft`` exists because composing happens across several Telegram messages
+    (text, then image, then group selection) and must survive the bot restarting
+    halfway through.
+    """
+
+    draft = "draft"
+    scheduled = "scheduled"
+    sending = "sending"
+    paused = "paused"
+    completed = "completed"
+    cancelled = "cancelled"
+
+
+class BroadcastMedia(enum.StrEnum):
+    none = "none"
+    photo = "photo"
+
+
 class ControlTaskKind(enum.StrEnum):
     sync_chats = "sync_chats"
     health_check = "health_check"
@@ -505,13 +526,22 @@ class ForwardingJob(Base, TimestampMixin):
 
 
 class ForwardingEvent(Base):
-    """Append-only durable history. ``detail_safe`` is redacted at write time."""
+    """Append-only durable history. ``detail_safe`` is redacted at write time.
+
+    One feed for both pipelines. A row belongs to a rule *or* a broadcast, never
+    both and never neither — the check constraint makes that structural, so the
+    activity screen can render any row without guessing where it came from.
+    """
 
     __tablename__ = "forwarding_events"
 
     id: Mapped[uuid.UUID] = uuid_pk()
-    rule_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("forwarding_rules.id", ondelete="CASCADE"), nullable=False
+    #: Nullable since broadcasts joined this table; see the check constraint.
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("forwarding_rules.id", ondelete="CASCADE")
+    )
+    broadcast_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("broadcasts.id", ondelete="CASCADE")
     )
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("forwarding_jobs.id", ondelete="SET NULL")
@@ -539,9 +569,188 @@ class ForwardingEvent(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "(rule_id IS NULL) <> (broadcast_id IS NULL)",
+            name="event_belongs_to_exactly_one_pipeline",
+        ),
         Index("ix_forwarding_events_rule_id_occurred_at", "rule_id", "occurred_at"),
+        Index("ix_forwarding_events_broadcast_id_occurred_at", "broadcast_id", "occurred_at"),
         Index("ix_forwarding_events_connection_id_occurred_at", "connection_id", "occurred_at"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Broadcasts
+# --------------------------------------------------------------------------- #
+class Broadcast(Base, TimestampMixin):
+    """Your own message, posted to groups you have chosen.
+
+    Distinct from a forwarding rule in one way that matters: the content is
+    authored here rather than copied from a source chat, so there is no source
+    peer, no album, and no content-protection question. Everything else —
+    per-destination durability, pacing, retry classification, obeying a flood
+    wait — is the same machinery, because those properties are not specific to
+    forwarding.
+
+    Targets are groups the connected account is already a member of. There is no
+    discovery, no invite, and no way to post somewhere you have not joined.
+    """
+
+    __tablename__ = "broadcasts"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[BroadcastStatus] = mapped_column(
+        _enum(BroadcastStatus, "broadcast_status"), default=BroadcastStatus.draft, nullable=False
+    )
+
+    body_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    media_kind: Mapped[BroadcastMedia] = mapped_column(
+        _enum(BroadcastMedia, "broadcast_media"), default=BroadcastMedia.none, nullable=False
+    )
+    #: The image bytes, not a Telegram file_id.
+    #:
+    #: A file_id is scoped to the bot that received it, so the admin bot's id is
+    #: meaningless to the connection that does the sending. The bytes are fetched
+    #: once at compose time and re-uploaded per delivery. Capped by
+    #: ``max_broadcast_media_bytes``.
+    media_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    media_filename: Mapped[str | None] = mapped_column(String(128))
+
+    #: Pause between two deliveries, so one broadcast does not arrive as a burst.
+    delay_ms: Mapped[int] = mapped_column(Integer, default=3000, nullable=False)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_reason_code: Mapped[str | None] = mapped_column(String(48))
+
+    targets: Mapped[list[BroadcastTarget]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    __table_args__ = (
+        CheckConstraint("delay_ms >= 0 AND delay_ms <= 3600000", name="broadcast_delay_bounded"),
+        Index("ix_broadcasts_user_id", "user_id"),
+        Index("ix_broadcasts_status", "status"),
+    )
+
+
+class BroadcastTarget(Base, TimestampMixin):
+    """One group, one delivery, one durable row.
+
+    Carries its own lease and attempt count for the same reason forwarding jobs
+    do: a worker that dies mid-broadcast must not lose the remaining groups, and
+    a restart must not re-send to groups already delivered.
+    """
+
+    __tablename__ = "broadcast_targets"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    broadcast_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("broadcasts.id", ondelete="CASCADE"), nullable=False
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_chats.id", ondelete="CASCADE"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    #: Same vocabulary as a forwarding job, so one activity screen renders both.
+    status: Mapped[JobStatus] = mapped_column(
+        _enum(JobStatus, "job_status"), default=JobStatus.pending, nullable=False
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    not_before: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: MTProto server-side dedupe token, persisted so a retry after an ambiguous
+    #: timeout reuses the same value and is therefore idempotent.
+    mtproto_random_id: Mapped[int | None] = mapped_column(BigInteger)
+    destination_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    last_error_class: Mapped[str | None] = mapped_column(String(32))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+
+    __table_args__ = (
+        # One row per (broadcast, group). This is the idempotency guarantee:
+        # enqueueing twice cannot produce two deliveries to the same group.
+        UniqueConstraint("broadcast_id", "chat_id", name="uq_broadcast_targets_broadcast_chat"),
+        Index("ix_broadcast_targets_claim", "not_before", postgresql_where="status = 'pending'"),
+        Index(
+            "ix_broadcast_targets_reclaim",
+            "lease_expires_at",
+            postgresql_where="status = 'leased'",
+        ),
+        Index("ix_broadcast_targets_broadcast_id_status", "broadcast_id", "status"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Auto-reply
+# --------------------------------------------------------------------------- #
+class AutoReply(Base, TimestampMixin):
+    """An answer for people who message the connected account first.
+
+    Strictly reactive. It has no recipient list and no way to acquire one: the
+    only thing that can trigger it is an incoming private message, so the account
+    never opens a conversation. That is the whole point of tying it to the
+    broadcast connection — someone sees an ad in a group, messages the account,
+    and gets an answer. Nothing is ever sent to someone who did not write first.
+    """
+
+    __tablename__ = "auto_replies"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    #: One reply per connection — the same account that broadcasts.
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_connections.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: Seconds before the same person may be answered again. Not a rate limit for
+    #: our benefit — it is what keeps a reply from becoming repeat messaging.
+    cooldown_s: Mapped[int] = mapped_column(Integer, default=86_400, nullable=False)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("cooldown_s >= 60", name="auto_reply_cooldown_floor"),
+        Index("ix_auto_replies_user_id", "user_id"),
+    )
+
+
+class AutoReplyLog(Base):
+    """Who has already been answered, and when.
+
+    Persisted rather than cached: after a restart, an empty cache would answer
+    everyone a second time.
+    """
+
+    __tablename__ = "auto_reply_log"
+
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_connections.id", ondelete="CASCADE"), primary_key=True
+    )
+    #: The Telegram user who wrote in. Paired with peer_type for the same reason
+    #: chats are: the id sequences overlap.
+    peer_type: Mapped[PeerType] = mapped_column(
+        _enum(PeerType, "peer_type"), primary_key=True, default=PeerType.user
+    )
+    peer_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    replied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reply_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    __table_args__ = (Index("ix_auto_reply_log_replied_at", "replied_at"),)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,7 +1,7 @@
 [project]
-name = "insight-store-backend"
+name = "insightadflow-backend"
 version = "0.1.0"
-description = "Insight Store — Telegram forwarding bot backend"
+description = "InsightAdFlow — Telegram forwarding bot backend"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi==0.141.1",

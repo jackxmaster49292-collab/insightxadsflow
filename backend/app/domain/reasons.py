@@ -75,6 +75,18 @@ AUTH_PAUSE: Final = "auth_pause"
 PARTIAL_ALBUM: Final = "partial_album"
 RETRYING: Final = "retrying"
 
+# --- broadcasts -------------------------------------------------------------
+BROADCAST_INACTIVE: Final = "broadcast_inactive"
+BROADCAST_POSTED: Final = "broadcast_posted"
+BROADCAST_CANCELLED: Final = "broadcast_cancelled"
+BROADCAST_EMPTY: Final = "broadcast_empty"
+
+# --- auto-reply -------------------------------------------------------------
+AUTO_REPLY_SENT: Final = "auto_reply_sent"
+AUTO_REPLY_COOLDOWN: Final = "auto_reply_cooldown"
+AUTO_REPLY_DISABLED: Final = "auto_reply_disabled"
+AUTO_REPLY_NOT_PRIVATE: Final = "auto_reply_not_private"
+
 REASON_TEXT: dict[str, str] = {
     OK: "Available.",
     NOT_A_MEMBER: "The connection is not a member of this chat.",
@@ -99,7 +111,7 @@ REASON_TEXT: dict[str, str] = {
     UNKNOWN: "Eligibility has not been checked yet.",
     PROTECTED_CONTENT: (
         "This chat has content protection enabled, so its messages cannot be forwarded or "
-        "copied. Insight Store does not bypass content protection."
+        "copied. InsightAdFlow does not bypass content protection."
     ),
     UNSUPPORTED_MESSAGE: "This message type is not supported and was skipped.",
     UNCOPYABLE_MESSAGE: "Telegram does not allow this message type to be copied.",
@@ -129,6 +141,20 @@ REASON_TEXT: dict[str, str] = {
     AUTH_PAUSE: "The connection was paused because it is no longer authorized.",
     PARTIAL_ALBUM: "Part of a grouped-media album did not arrive in time.",
     RETRYING: "A temporary failure occurred; a retry has been scheduled.",
+    BROADCAST_INACTIVE: "Skipped: the broadcast is paused, cancelled or already finished.",
+    BROADCAST_POSTED: "Posted to this group.",
+    BROADCAST_CANCELLED: "Cancelled before this group was reached.",
+    BROADCAST_EMPTY: "The broadcast has no message to send.",
+    AUTO_REPLY_SENT: "Replied automatically to an incoming direct message.",
+    AUTO_REPLY_COOLDOWN: (
+        "Not replied: this person was already answered recently. The cooldown is "
+        "what keeps an automatic reply from becoming repeat messaging."
+    ),
+    AUTO_REPLY_DISABLED: "Not replied: auto-reply is turned off for this connection.",
+    AUTO_REPLY_NOT_PRIVATE: (
+        "Not replied: automatic replies are only ever sent in a private chat "
+        "started by the other person."
+    ),
     SLOWMODE_WAIT: (
         "This group has slow mode enabled, so Telegram limits how often anyone can "
         "post in it. The message will be sent once the wait has passed."

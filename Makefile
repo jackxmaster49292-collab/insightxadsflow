@@ -87,13 +87,5 @@ typecheck: ## Static type check
 openapi: ## Regenerate openapi.yaml from the live app
 	cd backend && .venv/bin/python -m app.export_openapi ../openapi.yaml
 
-.PHONY: web
-web: ## Run the frontend dev server
-	cd frontend && npm run dev
-
-.PHONY: web-build
-web-build: ## Build the frontend
-	cd frontend && npm ci && npm run build
-
 .PHONY: check
 check: lint typecheck test ## Everything CI runs

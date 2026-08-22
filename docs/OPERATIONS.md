@@ -15,11 +15,12 @@ cp .env.example .env        # then fill in the required values below
 make up                     # docker compose up -d --build
 make migrate                # alembic upgrade head
 make seed                   # demo user + mock connection + mock chats (MockAdapter only)
-make test                   # pytest + vitest, Telegram fully mocked
+make test                   # pytest, Telegram fully mocked
 ```
 
-Panel at `http://localhost:8080`. Seed credentials are printed by `make seed` and only work when
-`TELEGRAM_PROVIDER=mock`.
+The control panel is your admin bot on Telegram — send it `/start`. Seed data is created by
+`make seed` and only works when `TELEGRAM_PROVIDER=mock`. The API is reachable on
+`http://127.0.0.1:8000` in development and is not published at all in production.
 
 `make up` starts only Postgres and Redis (on host ports 5433/6380) for running the backend directly;
 `make up-all` runs everything in containers. Both work from the same `.env` — Compose overrides the
@@ -173,7 +174,7 @@ Reviewable, one line per master acceptance criterion.
 - [x] No subscription quotas or monetization limits exist in the codebase — *test_no_quota_or_subscription_concepts_exist_in_the_codebase*
 - [x] Safeguards are documented as safety controls, not advertised as unlimited capacity — *README + PRODUCT_SPEC §11*
 - [x] Project runs from a clean checkout using the documented commands — *docker compose up -d; verified*
-- [x] Migrations, tests, lint, type checks, and builds all pass — *141 backend + 24 frontend tests; ruff/mypy/tsc clean*
+- [x] Migrations, tests, lint and type checks all pass — *307 tests; ruff and mypy --strict clean*
 - [x] README covers Telegram setup, supported types, safe use, limitations, recovery, deployment — *README.md*
 
 ## 9. Observability

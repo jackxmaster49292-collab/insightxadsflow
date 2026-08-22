@@ -1,144 +1,203 @@
-# Telegram Control Panel
+# The Telegram control panel
 
 **Status:** Implemented.
 **Last updated:** 2026-08-22
 
-The admin panel lives inside Telegram. A bot gives you day-to-day control and
-pushes alerts; a Mini App button opens the full panel for setup. The forwarding
-engine is untouched — it never knew what its control surface was.
+The bot is the whole admin surface. There is no website, no domain and no login
+form — you talk to a bot on Telegram and it does everything.
+
+> Superseded ADR-019 and ADR-020: this used to be a bot plus a Mini App. See
+> ADR-023 and ADR-024 for why that changed and what it cost.
 
 ---
 
-## 1. Why two surfaces
+## 1. What you can do
 
-| Surface | What it does | Why |
-|---|---|---|
-| **Bot** (chat + inline buttons) | Status, pause/resume, retry, activity, **push alerts** | Always at hand, and it can reach *you* instead of waiting to be checked |
-| **Mini App** (the React panel, opened inside Telegram) | Connect a bot/account, create and edit rules, browse chats | Credentials go over HTTPS. Typing them into a chat would put them in Telegram's message history |
+| Screen | What it is for |
+|---|---|
+| **Ads** | Write your own message and post it to groups you choose. |
+| **Auto-reply** | Answer people who message your account first. |
+| **Forwarding** | Copy new messages from one chat into others, automatically. |
+| **Accounts** | Connect a Telegram account by phone number, or a bot by token. |
+| **Groups** | The groups each connection has joined, and where it may post. |
+| **Activity** | What was sent, skipped or failed, and why. |
 
-That split is the whole design. **No secret is ever typed into a Telegram
-chat** — not a bot token, not a phone number, not a login code, and above all
-not a 2FA password.
+Commands: `/panel`, `/ads`, `/rules`, `/help`, `/cancel`.
 
-## 2. Authentication
+`/cancel` abandons whatever multi-step flow you are in the middle of. Every
+prompt mentions it.
 
-There is no password on this surface. Telegram signs the Mini App launch payload
-with a key derived from the admin bot's token, so the backend can prove who
-opened the panel:
+---
 
-```
-secret_key        = HMAC_SHA256(<admin_bot_token>, "WebAppData")
-data_check_string = every field except `hash`, sorted, joined with \n
-valid             = hex(HMAC_SHA256(data_check_string, secret_key)) == hash
-```
+## 2. Setting up, in order
 
-`POST /api/v1/auth/telegram` verifies that, then issues the same session cookie
-the web panel uses — so every other endpoint works unchanged.
+### 2.1 Create the panel bot
 
-Three separate gates, in order:
+Message **@BotFather**, send `/newbot`, and keep the token it gives you. This bot
+is the panel. It must be a **different** bot from any forwarding bot: Telegram
+allows only one program to receive a given bot's updates, and a second one gets
+`409 Conflict`.
 
-1. **Signature** — proves the launch came from *our* bot. A payload signed by any
-   other bot is rejected.
-2. **Freshness** — `auth_date` older than `MINIAPP_MAX_AGE_S` (default 24h) is
-   rejected, and a future-dated one is too.
-3. **Allowlist** — being verified is not being authorized. Only Telegram user ids
-   in `ADMIN_TELEGRAM_IDS` may proceed; everyone else gets a clear refusal and an
-   audit record.
-
-`ADMIN_TELEGRAM_IDS` is **empty by default**, so a misconfigured deployment is
-locked rather than open. The bot refuses to start at all with an empty allowlist,
-because the only thing it could do is reject everyone.
-
-Accounts created this way have `password_hash = NULL`. The password login path
-explicitly requires a stored hash, so a Telegram admin can never be reached
-through the password form with any input.
-
-## 3. Two rules that bite if ignored
-
-**The admin bot token must differ from every forwarding bot token.** Telegram
-permits a single `getUpdates` consumer per token; a second one receives
-**409 Conflict**. Sharing a token makes the admin bot and the forwarding listener
-fight over the same update stream, and both misbehave.
-
-**`callback_data` is limited to 1–64 bytes.** Buttons carry ids only — never chat
-titles or filter text. `rule:<uuid>:resume` is 43 bytes; a test asserts every
-callback we generate stays under the limit.
-
-## 4. What the bot can and cannot do
-
-| Action | Bot | Mini App |
-|---|---|---|
-| See connection health, rule status, 24h counts | ✅ | ✅ |
-| Pause / resume a rule | ✅ | ✅ |
-| Retry failed destinations | ✅ | ✅ |
-| Browse chats and eligibility reasons | ✅ | ✅ |
-| Recent forwarding events | ✅ | ✅ |
-| Trigger a chat sync | ✅ | ✅ |
-| **Connect a bot or account** | ❌ by design | ✅ |
-| **Create or edit a rule** | ❌ by design | ✅ |
-
-The two ❌ rows are deliberate: both need secrets or multi-step input, and both
-belong on HTTPS.
-
-## 5. Push alerts
-
-The advantage the web panel could never have. When a rule or connection
-auto-pauses, the worker writes to an `admin_notifications` outbox and the bot
-delivers it:
+Put the token and your numeric Telegram id (ask **@userinfobot**) in `.env`:
 
 ```
-⚠️ Rule paused automatically
-
-Announcements → Partners has been paused.
-
-The rule was paused automatically after repeated serious failures.
-
-Open the panel to review and resume it.
+ADMIN_BOT_TOKEN=...
+ADMIN_TELEGRAM_IDS=123456789
 ```
 
-The outbox is a table, not a direct Bot API call from the worker, so an alert
-survives a bot restart — the same durability rule the forwarding pipeline
-follows. A `dedupe_key` collapses repeats, so a failing rule cannot turn into a
-notification storm.
+`ADMIN_TELEGRAM_IDS` empty means **nobody** can use the panel. That is
+deliberate — a misconfigured deployment is locked rather than open.
 
-## 6. Setup
+### 2.2 Connect an account
 
-1. **Create the admin bot** — talk to `@BotFather`, `/newbot`, copy the token
-   into `ADMIN_BOT_TOKEN`. This bot does no forwarding.
-2. **Find your Telegram user id** — message `@userinfobot`. Put the number in
-   `ADMIN_TELEGRAM_IDS` (comma-separated for several operators).
-3. **Serve the Mini App over HTTPS** — set `MINIAPP_URL` to that origin. Telegram
-   only accepts `https://` for a `web_app` button; with anything else the
-   full-panel button is hidden rather than shown broken.
-4. **Register the Mini App** — in `@BotFather`: `/mybots` → your bot → *Bot
-   Settings* → *Menu Button* → set it to `MINIAPP_URL`.
-5. `docker compose up -d` and send `/start` to your bot.
+Send `/start`, tap **Accounts → Add account**, and follow the prompts:
 
-```bash
-ADMIN_BOT_TOKEN=123456789:AA...          # separate from any forwarding bot
-ADMIN_TELEGRAM_IDS=123456789,987654321   # empty = nobody
-MINIAPP_URL=https://panel.example.com    # must be https
-```
+1. a name for your own reference;
+2. the phone number, with country code;
+3. the login code Telegram sends you;
+4. the two-step verification password, if the account has one.
 
-## 7. Honest limitations
+**Send the login code with spaces or dashes between the digits** — `1 2 3 4 5`.
+Telegram cancels a login code it sees posted as plain digits in a chat. That
+protection is on your side; the prompt says so and asks you to work with it.
 
-- **Telegram account compromise = panel compromise.** There is no second factor
-  on this surface. Whoever controls your Telegram account controls the panel.
-  Keep 2FA enabled on your own Telegram account.
-- **The allowlist is the only authorization.** Anyone can message the bot; the
-  middleware runs before every handler, on both messages and button callbacks,
-  and rejects non-admins identically so the panel's existence is not confirmed.
-- **HTTPS is required for the Mini App.** Without it the bot still works, but
-  connecting accounts and editing rules have nowhere to happen.
-- **The bot is a control surface, not a forwarding path.** It never reads or
-  relays customer content; it only shows counts, statuses and reason codes.
+Adding a bot instead is the same flow with a token from @BotFather. A bot can
+only post in groups where you have added it as an administrator; an account can
+post anywhere it has already joined.
 
-## 8. Processes
+### 2.3 Sync groups
 
-| Service | Command | Scale |
-|---|---|---|
-| `adminbot` | `python -m app.adminbot.main` | **1** — one `getUpdates` consumer per token |
+**Accounts → (pick one) → Sync groups.** This reads the list of groups the
+connection has already joined and records where it is allowed to post. It never
+joins anything for you.
 
-Control commands from the bot enqueue durable `control_tasks` exactly like the
-HTTP API does. Tapping *Sync* returns "queued" immediately; the worker does the
-Telegram I/O. The bot never blocks on Telegram.
+Nothing else works until this has run at least once — the group picker has
+nothing to offer otherwise, and it says so.
+
+---
+
+## 3. Posting an ad
+
+**Ads → New ad**, then:
+
+1. a name, for your own reference;
+2. the message, exactly as it should appear;
+3. optionally an image, sent as a *photo* (a caption becomes the ad text);
+4. the pause between groups — 3 seconds is the default;
+5. **Groups**, which opens a tick-box list of groups this account can post in;
+6. **Send now**, which shows a summary and asks once more.
+
+The summary tells you how many groups, whether an image is attached, and roughly
+how long it will take. Once sending starts you can pause it — but messages
+already posted cannot be unsent, and the confirmation screen says that.
+
+While it is sending, the ad's screen shows progress, per-group outcomes, and a
+**Retry** button for groups that did not receive it. Retry never re-posts to a
+group that already got the message.
+
+### What the pause is for
+
+Telegram documents roughly 20 messages per minute to one group and about 30
+messages per second overall. A 3-second pause keeps one ad comfortably inside
+both. If a group has slow mode enabled, Telegram will ask for a longer wait and
+the system obeys it in full rather than working around it.
+
+The panel refuses a pause that would push the last delivery more than six hours
+out, and tells you the number so you can lower it.
+
+---
+
+## 4. Auto-reply
+
+**Auto-reply → Edit reply**, write the text, then **Turn on**.
+
+It answers people who message the connected account first — typically someone who
+saw an ad in a group and wrote to you. It cannot do anything else:
+
+* there is no recipient list, and no way to create one;
+* a message in a group never produces a reply;
+* the same person is answered once per waiting period (24 hours by default),
+  and that record is in the database, so a restart does not answer everyone
+  again.
+
+It uses the same account as your ads. That pairing is the point: the ad brings
+someone to the account, and the reply meets them there.
+
+---
+
+## 5. Forwarding rules
+
+**Forwarding → New rule**: a name, then the chat to copy *from*, chosen from a
+numbered list of chats the connection can read. The rule is created as a draft;
+open it to choose the groups to copy into, then resume it.
+
+Rule screens show status, source, destination count, per-destination delivery
+counts and a plain-language reason for anything paused.
+
+---
+
+## 6. Security model
+
+Anyone on Telegram can find and message a bot, so the allowlist is the entire
+security model for this surface.
+
+* `AdminOnlyMiddleware` runs before **every** handler, registered on both the
+  message and the callback observers. A callback does not pass through message
+  middleware, and missing that would leave every button unguarded.
+* Non-allowlisted senders get the same reply either way, and the attempt is
+  audited in its own transaction so the record survives the rejection.
+* Handlers use the same `user_id`-scoped repositories as the HTTP API, so one
+  admin cannot reach another's data even if the allowlist were bypassed.
+* Accounts created through the bot store `password_hash = NULL`, and the password
+  login path requires a stored hash, so they cannot be logged into with any
+  password.
+
+**Telegram account compromise equals panel compromise.** There is no second
+factor on this surface. That is the honest statement of the tradeoff.
+
+### Credentials in chat history
+
+Bot tokens, phone numbers, login codes and 2FA passwords are typed into the chat,
+because that is where the panel is. Telegram stores chat history on its servers,
+so those messages existed there for a moment regardless of what happens next.
+
+What the code does about it:
+
+* every prompt says the message will be deleted, before you send anything;
+* the message is deleted the instant it is read, on both sides;
+* the value goes straight to the service layer — never into conversation state,
+  never into a log, never into the database except as a hash;
+* the log redaction filter is a backstop, not the plan.
+
+Deletion is best-effort by definition: Telegram refuses to delete another
+account's message after 48 hours. **Rotate your bot token after setup** — that is
+cheap. A phone number cannot be rotated, which is why the login-code and 2FA
+messages are the exposure that actually matters.
+
+This is weaker than the HTTPS form it replaced. See ADR-024.
+
+---
+
+## 7. Screen mechanics
+
+* Screens are **edited in place** as you navigate, so the chat stays one panel
+  rather than an endless scroll.
+* A panel older than about 48 hours cannot be edited by Telegram's rules; tapping
+  a button on one sends a fresh panel instead of failing.
+* `callback_data` is capped at **64 bytes**, and Telegram rejects the whole
+  keyboard when one button exceeds it. Buttons carry ids only. The group picker
+  addresses a group by its index in a list held in conversation state (ADR-028).
+* Everything interpolated into a screen is escaped for MarkdownV2. Group titles
+  are attacker-influenced — someone can name a group `*bold*` — and one unescaped
+  character makes Telegram reject the message, so the screen simply never
+  appears. `tests/integration/test_bot_flows.py` renders every screen through a
+  checker for exactly this.
+
+---
+
+## 8. Alerts
+
+The worker never calls the Bot API. When a rule or connection pauses itself, the
+worker writes a row to `admin_notifications` and the bot drains that outbox and
+sends it. Alerts therefore survive a bot restart, and a `dedupe_key` collapses a
+failing rule's repeats into one message rather than a storm (ADR-022).

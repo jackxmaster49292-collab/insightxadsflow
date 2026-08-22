@@ -10,6 +10,8 @@ hashed, or logged in any form.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import uuid
 from dataclasses import dataclass
@@ -43,10 +45,17 @@ class PendingLogin:
     Held in memory only, keyed by connection id. It carries the phone number and
     ``phone_code_hash`` needed to complete sign-in, and never reaches the
     database or a log line.
+
+    ``adapter`` is the half-authenticated client that requested the code, and
+    keeping it is what makes the flow work at all: Telegram binds a login code to
+    the connection that asked for it, so completing sign-in on a freshly built
+    client fails with an invalid ``phone_code_hash``. It stays until the login
+    finishes or is abandoned.
     """
 
     phone: str
     phone_code_hash: str
+    adapter: TelegramAdapter | None = None
 
 
 _PENDING_LOGINS: dict[uuid.UUID, PendingLogin] = {}
@@ -61,7 +70,13 @@ def take_login(connection_id: uuid.UUID) -> PendingLogin | None:
 
 
 def forget_login(connection_id: uuid.UUID) -> None:
-    _PENDING_LOGINS.pop(connection_id, None)
+    """Drop the pending login and close the client it was holding open."""
+    pending = _PENDING_LOGINS.pop(connection_id, None)
+    if pending is not None and pending.adapter is not None:
+        # Fire-and-forget: an abandoned half-authenticated client must not keep
+        # a socket open, but failing to close one must not fail the login.
+        with contextlib.suppress(Exception):
+            asyncio.get_running_loop().create_task(pending.adapter.disconnect())
 
 
 def hash_phone(phone: str) -> str:
@@ -135,7 +150,12 @@ async def start_user_connection(
         phone_code_hash = await adapter.start_login(phone)
     else:  # mock provider
         phone_code_hash = "mock-code-hash"
-    remember_login(connection.id, PendingLogin(phone=phone, phone_code_hash=phone_code_hash))
+    # The adapter is kept, not rebuilt later: Telegram ties the code it just sent
+    # to this client.
+    remember_login(
+        connection.id,
+        PendingLogin(phone=phone, phone_code_hash=phone_code_hash, adapter=adapter),
+    )
     return connection
 
 
@@ -146,7 +166,8 @@ async def verify_user_code(
     if pending is None:
         raise ConnectionNotReady("No login is in progress for this connection.")
 
-    adapter = await adapter_for(session, connection)
+    # Must be the client that requested the code — see PendingLogin.
+    adapter = pending.adapter or await adapter_for(session, connection)
     if not hasattr(adapter, "complete_login"):  # mock provider
         state = await adapter.connect()
         await _finalize_user(session, connection=connection, state=state)
@@ -169,7 +190,13 @@ async def verify_user_code(
 async def verify_user_2fa(
     session: AsyncSession, *, connection: TelegramConnection, password: str
 ) -> ConnectionStatus:
-    adapter = await adapter_for(session, connection)
+    pending = take_login(connection.id)
+    if pending is None:
+        raise ConnectionNotReady("No login is in progress for this connection.")
+
+    # The same half-authenticated client again: the password step continues the
+    # sign-in the code step started.
+    adapter = pending.adapter or await adapter_for(session, connection)
     if not hasattr(adapter, "complete_2fa"):  # mock provider
         state = await adapter.connect()
     else:

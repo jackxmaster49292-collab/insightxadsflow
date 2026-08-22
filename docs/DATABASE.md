@@ -100,12 +100,53 @@ destination_peer_type ‖ destination_peer_id)`.
 delivered message to be re-delivered. `rule_version` is stored separately so a worker can detect that a
 job predates the current rule and re-evaluate filters before sending (see [OPERATIONS.md](OPERATIONS.md) §5).
 
+### `broadcasts`
+An "ad": the customer's own message, to be posted to groups they chose.
+`id` · `user_id` · `connection_id` · `name` · `status`
+ENUM(`draft`,`scheduled`,`sending`,`paused`,`completed`,`cancelled`) · `body_text` TEXT ·
+`media_kind` ENUM(`none`,`photo`) · `media_bytes` BYTEA NULL · `media_filename` NULL ·
+`delay_ms` INT · `scheduled_for` NULL · `started_at` NULL · `completed_at` NULL ·
+`paused_reason_code` NULL
+`media_bytes` holds the image itself rather than a Telegram `file_id`, because a `file_id` is scoped to
+the bot that received it and is meaningless to the connection doing the posting (ADR-027). Capped at
+`MAX_BROADCAST_MEDIA_BYTES`.
+`draft` exists because composing spans several Telegram messages and must survive a bot restart.
+
+### `broadcast_targets`
+One group, one delivery, one durable row — the same claim/lease shape as `forwarding_jobs`.
+`id` · `broadcast_id` · `chat_id` · `position` · `status` ENUM `job_status` · `attempt_count` ·
+`not_before` · `lease_owner` NULL · `lease_expires_at` NULL · `mtproto_random_id` NULL ·
+`destination_message_id` NULL · `last_error_class` NULL · `last_error_code` NULL
+**Unique** `(broadcast_id, chat_id)` — the guarantee that enqueueing twice cannot produce two
+deliveries to the same group. Partial indexes on `not_before WHERE status='pending'` and
+`lease_expires_at WHERE status='leased'`, matching the job queue.
+`chat_id` is a foreign key into `telegram_chats`, never a raw peer id: a broadcast cannot address a chat
+the account was never confirmed to be in.
+
+### `auto_replies`
+One per connection — the same connection that broadcasts.
+`id` · `user_id` · `connection_id` **UNIQUE** · `enabled` · `body_text` TEXT · `cooldown_s` INT ·
+`sent_count` INT
+`CHECK (cooldown_s >= 60)`. There is no recipient column and no recipient table, because auto-reply can
+only ever answer someone who wrote first (ADR-026).
+
+### `auto_reply_log`
+Who has already been answered, and when.
+**PK** `(connection_id, peer_type, peer_id)` · `replied_at` · `reply_count`
+A table rather than a cache: an empty cache after a restart would answer everyone a second time. The
+claim is a single `INSERT … ON CONFLICT DO UPDATE … WHERE replied_at < cutoff`, so two listeners racing
+on the same incoming message cannot both send.
+
 ### `forwarding_events`
-Durable, append-only history.
-`id` · `rule_id` · `job_id` NULL · `connection_id` · `source_chat_id` · `source_message_ids` BIGINT[] ·
-`destination_chat_id` NULL · `outcome` ENUM(`forwarded`,`skipped`,`failed`,`retry_scheduled`,`paused`) ·
+Durable, append-only history, shared by both pipelines.
+`id` · `rule_id` NULL · `broadcast_id` NULL · `job_id` NULL · `connection_id` · `source_chat_id` ·
+`source_message_ids` BIGINT[] · `destination_chat_id` NULL ·
+`outcome` ENUM(`forwarded`,`skipped`,`failed`,`retry_scheduled`,`paused`) ·
 `reason_code` · `detail_safe` TEXT · `attempt` INT · `occurred_at`
-Index `(rule_id, occurred_at DESC)` and `(connection_id, occurred_at DESC)` for the activity views.
+`CHECK ((rule_id IS NULL) <> (broadcast_id IS NULL))` — every row belongs to exactly one pipeline, so
+the activity screen can render any row without guessing where it came from.
+Indexes `(rule_id, occurred_at DESC)`, `(broadcast_id, occurred_at DESC)` and
+`(connection_id, occurred_at DESC)` for the activity views.
 `detail_safe` is redacted at write time and is the only field the UI renders.
 
 ### `idempotency_keys` (HTTP layer)
@@ -155,6 +196,7 @@ Enforced by constraint where possible, by transactional service logic where not.
 |---|---|
 | `forwarding_events` | 90 days rolling (configurable), then deleted by a scheduled job |
 | `forwarding_jobs` terminal rows | 30 days, then deleted; aggregate counts preserved in events |
+| `auto_reply_log` | 30 days — comfortably longer than any usable cooldown, so purging can never let the same person be answered twice |
 | `idempotency_keys` | 24 hours |
 | `audit_events` | 365 days |
 | `app_sessions` expired | 30 days |

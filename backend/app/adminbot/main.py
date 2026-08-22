@@ -93,16 +93,8 @@ async def run() -> None:
             "adminbot_starting",
             username=me.username,
             admins=len(settings.admin_ids),
-            miniapp_configured=settings.miniapp_url.startswith("https://"),
+            provider=settings.telegram_provider,
         )
-        if not settings.miniapp_url.startswith("https://"):
-            log.warning(
-                "miniapp_not_configured",
-                detail=(
-                    "MINIAPP_URL is not an https:// origin, so the full-panel button "
-                    "is hidden. Connecting accounts and editing rules need it."
-                ),
-            )
 
         alerts = asyncio.create_task(notifier.run(bot, _stop))
         await build_dispatcher().start_polling(bot, allowed_updates=ALLOWED_UPDATES)

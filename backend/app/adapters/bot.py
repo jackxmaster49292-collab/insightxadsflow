@@ -281,6 +281,42 @@ class BotAdapter:
         except TimeoutError as exc:
             raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
 
+    async def send_text(
+        self,
+        destination: ChatRef,
+        text: str,
+        *,
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        # random_id is accepted for interface symmetry and ignored: the Bot API
+        # has no idempotency token, which is why a timeout fails closed here.
+        try:
+            sent = await self._bot.send_message(chat_id=destination.peer_id, text=text)
+            return DeliveryReceipt(destination_message_id=int(sent.message_id))
+        except TimeoutError as exc:
+            raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
+
+    async def send_photo(
+        self,
+        destination: ChatRef,
+        photo: bytes,
+        *,
+        caption: str = "",
+        filename: str = "image.jpg",
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        from aiogram.types import BufferedInputFile
+
+        try:
+            sent = await self._bot.send_photo(
+                chat_id=destination.peer_id,
+                photo=BufferedInputFile(photo, filename=filename),
+                caption=caption or None,
+            )
+            return DeliveryReceipt(destination_message_id=int(sent.message_id))
+        except TimeoutError as exc:
+            raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
+
     # --- misc ------------------------------------------------------------ #
     def classify_error(self, exc: BaseException) -> ClassifiedError:
         return classify_error(exc)

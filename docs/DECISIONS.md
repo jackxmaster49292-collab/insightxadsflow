@@ -193,6 +193,93 @@ A unique `dedupe_key` collapses repeats.
 produces one message rather than a storm — the same durability rule the
 forwarding pipeline already follows.
 
+### ADR-023 — The Mini App is removed; the bot is the only admin surface
+**Context.** ADR-019 kept a React panel inside Telegram for anything needing
+secrets or multi-step input. In practice that meant the product could not be set
+up without a domain, a TLS certificate and a reverse proxy — and the operator
+asked for everything to happen in the bot itself.
+**Decision.** Supersedes ADR-019. Delete the Mini App, the React frontend, the
+nginx container and Caddy. Every flow — connecting a bot, connecting an account
+by phone number, composing an ad, choosing groups, editing the auto-reply,
+managing rules — is an aiogram FSM conversation. The HTTP API stays, unpublished,
+as the service layer the tests drive and the health endpoint.
+**Consequence.** Deployment needs no domain, no certificate and no open port; the
+stack only makes outbound connections. Cost: multi-step input in a chat is
+clumsier than a form, and long lists need paging because `callback_data` is
+capped at 64 bytes.
+
+### ADR-024 — Credentials are accepted in the chat, deleted immediately, and the
+tradeoff is stated
+**Context.** ADR-020 said secrets must never enter a Telegram chat, and made the
+Mini App mandatory for that reason. With the Mini App gone (ADR-023) the choice
+is between accepting credentials in the chat or having no way to connect an
+account at all. The operator was told plainly that chat history lives on
+Telegram's servers and asked for the bot flow anyway.
+**Decision.** Supersedes ADR-020. Bot tokens, phone numbers, login codes and 2FA
+passwords are accepted as chat messages. Every prompt that asks for one first
+states that the message will be deleted and that it was on Telegram's servers
+regardless. The message is deleted the moment it is read; the value is passed
+straight to the service layer and never written to FSM state, a log, or the
+database. `app/adminbot/secrets.py` is the only place any of this happens.
+**Consequence.** This is genuinely weaker than the HTTPS form it replaces, and
+the code says so rather than implying otherwise. Deletion is best-effort by
+definition — Telegram refuses to delete another account's message after 48 hours
+— so it narrows the window rather than closing it.
+
+### ADR-025 — A broadcast reuses the delivery machinery, not the forwarding tables
+**Context.** "Ads" — posting the operator's own message to chosen groups — needs
+per-destination durability, pacing, retry classification, flood-wait obedience
+and a pre-send permission check. Those are exactly what `forwarding_jobs`
+provides. The obvious move was to make `source_chat_id` nullable and reuse it.
+**Decision.** Separate `broadcasts` and `broadcast_targets` tables with the same
+claim/lease shape, and a separate `execute_target` that shares the error
+taxonomy, backoff and safety-pause helpers. `execute_job` is left alone.
+**Consequence.** Some structural duplication between two ~150-line functions,
+accepted deliberately: `execute_job` is the most safety-critical function in the
+system, and threading "is this a broadcast?" conditionals through its
+stale-version handling, content-protection refusal and album logic would make
+both paths harder to reason about. The two share everything that is genuinely
+common and nothing that is not.
+
+### ADR-026 — Auto-reply can only answer, never initiate
+**Context.** An ad brings people to the account; answering them by hand does not
+scale. Every nearby product design — a recipient list, an import, a "message
+everyone who ever wrote" button — is unsolicited messaging.
+**Decision.** The auto-reply module has exactly one entry point,
+`handle_incoming(sender=...)`, called only from the listener with a message that
+has already arrived. A non-private chat is refused outright. A per-person
+cooldown, held in Postgres rather than a cache, means one answer per person per
+window even across a restart. A guard test pins the module's public surface and
+fails if a function taking a list of recipients is ever added.
+**Consequence.** The safety property is structural rather than a matter of
+review: there is no code path that can address someone who did not write first,
+and adding one breaks the build.
+
+### ADR-027 — Broadcast images are stored as bytes, not a Telegram file id
+**Context.** The natural thing is to keep the `file_id` of the photo the operator
+sent to the panel. A `file_id` is scoped to the bot that received it, so the
+admin bot's id is meaningless to the account or bot that does the posting.
+**Decision.** The admin bot downloads the image once at compose time and stores
+the bytes in `broadcasts.media_bytes`, capped at 5 MB. Each delivery re-uploads
+them.
+**Consequence.** Bytes in Postgres, which is not where large media belongs, and
+re-uploading per group costs bandwidth. Accepted for a single ad image: the
+alternative is object storage (rejected in ADR-013) for one small blob per
+broadcast.
+
+### ADR-028 — Picker buttons address a group by index, not by id
+**Context.** Telegram caps `callback_data` at 64 bytes and rejects the entire
+keyboard — not just the offending button — when one exceeds it. A toggle button
+carrying both a broadcast id and a chat id is 69 bytes even with the dashes
+stripped.
+**Decision.** The picker stores the ordered chat ids in FSM state and buttons
+carry the index into that list (`pk:t7`). Selection lives in FSM state too,
+because `callback_data` cannot hold a list.
+**Consequence.** Every picker callback is under ten bytes regardless of how many
+groups exist. The ordering becomes load-bearing: the list a keyboard was built
+from is the list its callbacks resolve against, and an out-of-range index is
+ignored rather than raising.
+
 ---
 
 ## Open tradeoffs
@@ -207,3 +294,11 @@ forwarding pipeline already follows.
    becomes the bottleneck, move signalling to Redis Streams while keeping Postgres authoritative.
 5. **Edited source messages.** MVP does **not** propagate edits — an edit after forwarding leaves the
    destination copy stale. Needs a product decision before V1.
+6. **Credentials in chat history.** ADR-024 accepts a real weakening relative to an HTTPS form, at the
+   operator's explicit request. Rotating a bot token after setup is cheap and worth doing; a phone
+   number cannot be rotated, so the login-code and 2FA messages are the exposure that matters.
+7. **One connection drives ads and auto-reply.** The panel picks the first active connection rather
+   than asking. Simple and matches the intended use, but a second account cannot yet run its own ad
+   with its own reply.
+8. **Broadcast media in Postgres.** ADR-027. Fine for one image per ad; a video or a document library
+   would need the object storage ADR-013 deferred.

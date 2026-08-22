@@ -2,42 +2,19 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# What it changes:
-#   * Caddy terminates TLS on 80/443 and gets a Let's Encrypt certificate
-#     automatically. Telegram requires https:// for the Mini App button.
-#   * Postgres and Redis stop publishing ports to the host. In the base file
-#     they are exposed for local development; on a public VPS that would put
-#     your database on the internet.
-#   * nginx no longer publishes 8080 — Caddy is the only way in.
+# The control panel is the Telegram bot, which reaches Telegram by making
+# outbound requests. Nothing in this stack needs to accept an inbound connection,
+# so production publishes no ports at all — there is no domain to point at it, no
+# TLS certificate to obtain, and no web surface to attack.
+#
+# What this file changes, relative to the base:
+#   * the API stops publishing 8000 — it is reachable only inside the network;
+#   * Postgres and Redis stop publishing ports. The base file exposes them for
+#     local development; on a public VPS that would put your database on the
+#     internet.
+#   * POSTGRES_PASSWORD becomes mandatory rather than defaulted.
 
 services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      # ":-" also covers PANEL_DOMAIN being present but empty, which is how
-      # .env.example ships it. Caddy's own {$VAR:default} only fires when the
-      # variable is unset, so an empty value would produce an unparseable
-      # site address.
-      PANEL_DOMAIN: ${PANEL_DOMAIN:-:80}
-    networks: [insight]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - caddy_logs:/var/log/caddy
-    depends_on:
-      - frontend
-      - api
-
-  # Reachable only from inside the Docker network now.
-  frontend:
-    ports: !reset []
-
   api:
     ports: !reset []
 
@@ -51,8 +28,3 @@ services:
 
   redis:
     ports: !reset []
-
-volumes:
-  caddy_data:
-  caddy_config:
-  caddy_logs:

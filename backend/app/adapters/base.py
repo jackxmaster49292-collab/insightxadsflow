@@ -182,6 +182,37 @@ class TelegramAdapter(Protocol):
         preserve_caption: bool = True,
     ) -> DeliveryReceipt: ...
 
+    async def send_text(
+        self,
+        destination: ChatRef,
+        text: str,
+        *,
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        """Send an original message the customer wrote.
+
+        Unlike the forward/copy pair above, nothing here originates from another
+        chat, so there is no source peer and no content-protection question.
+        """
+        ...
+
+    async def send_photo(
+        self,
+        destination: ChatRef,
+        photo: bytes,
+        *,
+        caption: str = "",
+        filename: str = "image.jpg",
+        random_id: int | None = None,
+    ) -> DeliveryReceipt:
+        """Send an image the customer uploaded, with an optional caption.
+
+        Takes bytes rather than a file identifier on purpose: a Telegram
+        ``file_id`` is scoped to the bot that received it, so the id the admin
+        bot sees is meaningless to the connection doing the sending.
+        """
+        ...
+
     def classify_error(self, exc: BaseException) -> ClassifiedError: ...
 
     def capabilities(self) -> Capabilities: ...
