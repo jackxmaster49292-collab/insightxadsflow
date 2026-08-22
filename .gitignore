@@ -1,0 +1,26 @@
+# Secrets — never committed. The KEK lives only in the environment.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Telegram session material must never reach the repo
+*.session
+*.session-journal
+
+# OS
+.DS_Store

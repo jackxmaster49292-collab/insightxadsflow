@@ -1,0 +1,97 @@
+name: insight-store
+
+x-backend: &backend
+  build:
+    context: ./backend
+  env_file: .env
+  environment:
+    # Overrides .env, which points at the host ports for running the backend
+    # outside Docker. Inside the network, services resolve each other by name.
+    DATABASE_URL: postgresql+asyncpg://insight:insight@postgres:5432/insight
+    REDIS_URL: redis://redis:6379/0
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: insight
+      POSTGRES_PASSWORD: insight
+      POSTGRES_DB: insight
+    ports: ["5433:5432"]
+    # Postgres 18+ expects a single mount at /var/lib/postgresql; the data lives
+    # in a version-specific subdirectory so pg_upgrade --link can work later.
+    volumes: ["pgdata:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U insight"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports: ["6380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8000:8000"]
+
+  # Intake. Scales horizontally: a Redis lock per connection guarantees only one
+  # listener opens a client for a given connection.
+  listener:
+    <<: *backend
+    command: ["python", "-m", "app.listener"]
+    # These services expose no HTTP port, so the image's HTTP healthcheck does
+    # not apply to them.
+    healthcheck:
+      disable: true
+
+  # Exactly one instance — it owns lease reclaim and retention.
+  scheduler:
+    <<: *backend
+    command: ["python", "-m", "app.scheduler"]
+    healthcheck:
+      disable: true
+    deploy:
+      replicas: 1
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
+
+  # The Telegram control panel. Its token MUST differ from any forwarding bot's:
+  # Telegram allows one getUpdates consumer per token and a second gets 409.
+  # Exactly one instance — two would fight over the same update stream.
+  adminbot:
+    <<: *backend
+    command: ["python", "-m", "app.adminbot.main"]
+    healthcheck:
+      disable: true
+    deploy:
+      replicas: 1
+
+  frontend:
+    build:
+      context: ./frontend
+    ports: ["8080:80"]
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
