@@ -31,7 +31,6 @@ from app.adapters.base import (
     InboundMessage,
     MediaType,
     PeerKind,
-    QrLogin,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import AdapterError, ClassifiedError, ErrorClass, classify_error
@@ -317,19 +316,6 @@ class BotAdapter:
             return DeliveryReceipt(destination_message_id=int(sent.message_id))
         except TimeoutError as exc:
             raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
-
-    # --- QR sign-in ------------------------------------------------------ #
-    # A bot has no QR sign-in: it authenticates with a token and there is no
-    # account to link a device to. Raising says that plainly rather than
-    # returning something the caller would have to interpret.
-    async def start_qr_login(self) -> QrLogin:
-        raise AdapterError(reasons.QR_NOT_SUPPORTED, ErrorClass.PERMANENT_CONTENT)
-
-    async def wait_for_qr(self, login: QrLogin, *, timeout_s: float) -> ConnectionState:
-        raise AdapterError(reasons.QR_NOT_SUPPORTED, ErrorClass.PERMANENT_CONTENT)
-
-    async def refresh_qr(self, login: QrLogin) -> QrLogin:
-        raise AdapterError(reasons.QR_NOT_SUPPORTED, ErrorClass.PERMANENT_CONTENT)
 
     # --- misc ------------------------------------------------------------ #
     def classify_error(self, exc: BaseException) -> ClassifiedError:

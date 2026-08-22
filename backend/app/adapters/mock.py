@@ -20,7 +20,6 @@ from app.adapters.base import (
     DiscoveredChat,
     HealthReport,
     InboundMessage,
-    QrLogin,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import ClassifiedError, classify_error
@@ -50,8 +49,6 @@ class MockScript:
     username: str = "mock_account"
     next_destination_message_id: int = 1000
     connect_error: BaseException | None = None
-    #: Makes the next QR wait time out once, for the refresh path.
-    qr_expires: bool = False
 
     def record(self, method: str, *args: object, **kwargs: object) -> None:
         self.calls.append(MockCall(method, args, kwargs))
@@ -195,24 +192,6 @@ class MockAdapter:
         self._maybe_raise(destination)
         self.script.next_destination_message_id += 1
         return DeliveryReceipt(destination_message_id=self.script.next_destination_message_id)
-
-    # --- QR sign-in ------------------------------------------------------ #
-    async def start_qr_login(self) -> QrLogin:
-        self.script.record("start_qr_login")
-        return QrLogin(url="tg://login?token=mock-token", handle="mock")
-
-    async def wait_for_qr(self, login: QrLogin, *, timeout_s: float) -> ConnectionState:
-        self.script.record("wait_for_qr", timeout_s=timeout_s)
-        if self.script.qr_expires:
-            # Scripted expiry, so a test can exercise the refresh path without
-            # waiting for a real token to age out.
-            self.script.qr_expires = False
-            raise TimeoutError("qr token expired")
-        return await self.connect()
-
-    async def refresh_qr(self, login: QrLogin) -> QrLogin:
-        self.script.record("refresh_qr")
-        return QrLogin(url="tg://login?token=mock-token-2", handle="mock")
 
     # --- misc ------------------------------------------------------------ #
     def classify_error(self, exc: BaseException) -> ClassifiedError:

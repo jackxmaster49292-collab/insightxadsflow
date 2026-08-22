@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from app.adapters.errors import ClassifiedError
 
@@ -119,20 +119,6 @@ class HealthReport:
 
 
 @dataclass(slots=True)
-class QrLogin:
-    """An in-progress QR sign-in.
-
-    ``url`` is the ``tg://login?token=…`` value to render as a QR code.
-    ``handle`` is the provider's own object, opaque here — it is passed back to
-    the adapter rather than inspected, so no Telethon type crosses this
-    boundary.
-    """
-
-    url: str
-    handle: Any = None
-
-
-@dataclass(slots=True)
 class ConnectionState:
     status: str
     account_id: int | None = None
@@ -226,23 +212,6 @@ class TelegramAdapter(Protocol):
         bot sees is meaningless to the connection doing the sending.
         """
         ...
-
-    async def start_qr_login(self) -> QrLogin:
-        """Begin a QR sign-in.
-
-        Only meaningful for an account connection. It exists on the interface
-        because it is the *only* sign-in that survives being driven from inside
-        a Telegram chat: nothing secret is typed, so Telegram has no code to
-        cancel.
-        """
-        ...
-
-    async def wait_for_qr(self, login: QrLogin, *, timeout_s: float) -> ConnectionState:
-        """Block until scanned. A timeout means the token expired, not that the
-        sign-in failed."""
-        ...
-
-    async def refresh_qr(self, login: QrLogin) -> QrLogin: ...
 
     def classify_error(self, exc: BaseException) -> ClassifiedError: ...
 

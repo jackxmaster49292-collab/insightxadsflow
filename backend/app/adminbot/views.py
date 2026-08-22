@@ -326,8 +326,11 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
             "",
             "Nothing connected yet\\.",
             "",
-            "*Account* — your own Telegram account, added with your phone number\\. "
-            "Posts as you, into groups you have already joined\\.",
+            "*Account* — a Telegram account, added with its phone number\\. Posts "
+            "as that account, into groups it has already joined\\.\n"
+            "_Telegram cancels a login code it sees an account send in a chat, so "
+            "this works only for an account other than the one you are messaging "
+            "me from\\._",
             "",
             "*Bot* — a bot from @BotFather\\. It can only post where you have added "
             "it as an administrator\\.",
@@ -363,11 +366,6 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
                 [
                     InlineKeyboardButton(text="➕ Add account", callback_data="add:user"),
                     InlineKeyboardButton(text="➕ Add bot", callback_data="add:bot"),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="Add account by phone instead", callback_data="add:phone"
-                    )
                 ],
                 _home_row(),
             ]

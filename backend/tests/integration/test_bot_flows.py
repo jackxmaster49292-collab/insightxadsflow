@@ -290,8 +290,8 @@ async def test_a_group_title_full_of_markdown_does_not_break_the_screen(client, 
 async def test_the_phone_login_flow_reaches_a_connected_account(client, actor, state, session):
     user_id = uuid.UUID(actor.id)
 
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main account"), user_id=user_id, state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main account"), state=state)
     assert "country code" in Sent.last()
 
     await handlers.account_phone(a_message("+919876543210"), user_id=user_id, state=state)
@@ -313,8 +313,8 @@ async def test_the_phone_login_flow_reaches_a_connected_account(client, actor, s
 async def test_the_phone_number_is_never_stored_in_the_clear(client, actor, state, session):
     """Only a hash is kept, and the message carrying it is deleted."""
     user_id = uuid.UUID(actor.id)
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=user_id, state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main"), state=state)
 
     deleted_before = Sent.deleted
     # Deliberately not the number the prompt uses as its example, so an echo is
@@ -335,8 +335,8 @@ async def test_the_phone_number_is_never_stored_in_the_clear(client, actor, stat
 
 async def test_the_login_code_message_is_deleted(client, actor, state):
     user_id = uuid.UUID(actor.id)
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=user_id, state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main"), state=state)
     await handlers.account_phone(a_message("+919876543210"), user_id=user_id, state=state)
 
     deleted_before = Sent.deleted
@@ -344,25 +344,22 @@ async def test_the_login_code_message_is_deleted(client, actor, state):
     assert Sent.deleted == deleted_before + 1
 
 
-async def test_the_code_prompt_explains_why_to_space_out_the_digits(client, actor, state):
-    """Telegram cancels a code it sees posted as plain digits. Telling people to
-    work around that silently would be worse than explaining it."""
-    user_id = uuid.UUID(actor.id)
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=user_id, state=state)
-    await handlers.account_phone(a_message("+919876543210"), user_id=user_id, state=state)
+async def test_the_warning_comes_before_a_code_is_ever_requested(client, actor, state):
+    """Telegram burns a code the moment it sees the account send it, so being
+    told afterwards is useless — the code is already gone."""
+    await handlers.add_account(a_callback("add:user"), state=state)
 
-    prompt = Sent.last()
-    assert "space or a dash" in prompt
-    assert "cancels" in prompt
+    warning = Sent.last()
+    assert "previously shared" in warning
+    assert "not* the one you are messaging me from" in warning
 
 
 async def test_a_malformed_phone_number_is_rejected_without_starting_a_login(
     client, actor, state, session
 ):
     user_id = uuid.UUID(actor.id)
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=user_id, state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main"), state=state)
     await handlers.account_phone(a_message("9876543210"), user_id=user_id, state=state)
 
     assert "country code" in Sent.last()
@@ -400,8 +397,8 @@ async def test_the_warning_about_chat_history_is_shown_before_every_secret(clien
     assert "deleted from this chat" in Sent.last()
 
     Sent.reset()
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=uuid.UUID(actor.id), state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main"), state=state)
     assert "deleted from this chat" in Sent.last()
 
 
@@ -760,8 +757,8 @@ async def test_a_malformed_callback_does_not_crash(client, actor, state):
 
 
 async def test_cancel_clears_a_half_finished_flow(client, actor, state):
-    await handlers.add_account_by_phone(a_callback("add:phone"), state=state)
-    await handlers.account_label(a_message("Main"), user_id=uuid.UUID(actor.id), state=state)
+    await handlers.add_account(a_callback("add:user"), state=state)
+    await handlers.account_label(a_message("Main"), state=state)
     assert await state.get_state() is not None
 
     await handlers.cancel_flow(a_message("/cancel"), user_id=uuid.UUID(actor.id), state=state)

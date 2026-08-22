@@ -20,9 +20,6 @@ dependencies = [
     "aiogram==3.30.0",
     "httpx==0.28.1",
     "itsdangerous==2.2.0",
-    # QR sign-in. Pure Python and dependency-free, which is why it is preferred
-    # over qrcode+Pillow for rendering one small PNG.
-    "segno==1.6.6",
 ]
 
 [project.optional-dependencies]

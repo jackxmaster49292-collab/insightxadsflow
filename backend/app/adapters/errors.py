@@ -89,7 +89,6 @@ _BY_EXCEPTION_NAME: dict[str, tuple[ErrorClass, str]] = {
     "PhoneNumberFloodError": (ErrorClass.RATE_LIMIT, "phone_number_flood"),
     "PasswordHashInvalidError": (ErrorClass.AUTH, "two_factor_password_invalid"),
     "SessionPasswordNeededError": (ErrorClass.AUTH, "two_factor_required"),
-    "QrTokenExpiredError": (ErrorClass.AUTH, "qr_expired"),
     "ChatWriteForbiddenError": (ErrorClass.PERMISSION, "write_forbidden"),
     "ChatAdminRequiredError": (ErrorClass.PERMISSION, "admin_required"),
     "ChatSendMediaForbiddenError": (ErrorClass.PERMISSION, "send_media_forbidden"),

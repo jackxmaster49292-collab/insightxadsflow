@@ -54,41 +54,41 @@ By default only those ids can use the bot at all. To let other people in, see
 
 ### 2.2 Connect an account
 
-Send `/start`, tap **Accounts → Add account**, give it a name, and the bot sends
-you a **QR code**. On the phone holding the account you want to connect:
+Send `/start`, tap **Accounts → Add account**, then:
 
-**Settings → Devices → Link Desktop Device**, then scan it.
+1. a name for your own reference;
+2. the phone number, with country code;
+3. the login code Telegram sends to that account;
+4. its two-step verification password, if it has one.
 
-If the account has two-step verification, send that password afterwards. It is
-used once and never stored.
+#### Read this before you start
 
-#### Why a QR and not a login code
+**Telegram cancels any login code it sees an account send inside a chat.** It is
+a protection against the "send me your code" scam, and it is not worked around
+here.
 
-Telegram **cancels any login code it sees your account send inside a chat**. So
-typing the code into this bot burns it, and the sign-in fails with *"the code
-was previously shared by your account"* even though the digits were right.
+So connecting **the account you are messaging this bot from will fail**, every
+time, with *"the code was previously shared by your account"* — however
+carefully you type the digits. Nothing is misconfigured when that happens.
 
-That protection is working as intended and is not worked around here. A QR
-simply has no code to leak — nothing secret enters the conversation at all.
+It works when the account you are connecting is a **different** account from the
+one driving the bot: Telegram never sees that account send its own code, so the
+code survives.
 
-The codes expire in seconds, so the bot keeps sending fresh ones until you scan.
-If you take too long it stops and clears the attempt so you can start again.
+The panel says all of this on the first screen, before asking for anything.
 
-**Accounts → Add account by phone instead** is still there. It works only when
-the account you are connecting is *not* the one you are messaging the bot from,
-because then Telegram never sees that account send its own code.
+#### If a sign-in fails or gets stuck
+
+Only one sign-in can be in progress at a time, and a failed one stays behind.
+Open **Accounts**, tap that connection, and use **Cancel sign-in** — then start
+again. Without that you would be told "already in progress" forever.
 
 #### Adding a bot
 
-Same flow with a token from @BotFather. A bot can only post in groups where you
+Same flow with a token from @BotFather. A bot token is not cancelled the way a
+login code is, so this always works. A bot can only post in groups where you
 have added it as an administrator; an account can post anywhere it has already
 joined.
-
-#### If a sign-in gets stuck
-
-Only one sign-in can be in progress at a time. If one fails and is left behind,
-open **Accounts**, tap that connection, and use **Cancel sign-in** — then start
-again.
 
 ### 2.3 Sync groups
 

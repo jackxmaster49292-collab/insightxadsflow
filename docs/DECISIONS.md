@@ -388,6 +388,26 @@ stuck.
 watcher also clears the attempt on timeout or hard failure, so the common case
 does not need the button at all.
 
+### ADR-036 — QR removed; phone sign-in only, with its limit stated up front
+**Context.** ADR-034 made QR the default because Telegram cancels any login code
+it sees an account send inside a chat, which makes phone sign-in fail for the
+account driving the bot. The operator asked for QR to be removed and the phone
+flow kept, having been shown that consequence and the alternatives.
+**Decision.** Supersedes ADR-034. The QR flow, its adapter methods and the
+``segno`` dependency are removed. Phone → code → 2FA is the only account
+sign-in. The constraint is not hidden: the very first screen, before a name or a
+number is asked for, states that Telegram cancels codes sent in chats and that
+this works only for an account *other* than the one messaging the bot. When a
+code is rejected the message says the same thing and adds that retrying will
+fail identically, rather than implying a typo.
+**Consequence.** Connecting the operator's own account from inside the bot is no
+longer possible — that is the accepted cost of the decision, not an oversight.
+Connecting a second account still works. ADR-035's *Cancel sign-in* becomes
+load-bearing rather than a convenience: a burned code leaves a half-finished
+connection every time, and that is now the expected path rather than an edge
+case. Anyone wanting to connect the driving account needs a sign-in surface
+outside Telegram, which this deployment deliberately no longer has (ADR-023).
+
 ---
 
 ## Open tradeoffs
@@ -416,9 +436,12 @@ does not need the button at all.
    engineering fix that is not evasion — proxy rotation is explicitly out of scope — so the mitigation
    is operational: keep the population small enough to know, and suspend accounts that misuse it.
    ``ACCESS_MODE=open`` prints this warning at startup and in `deploy.sh`.
-10. **A 2FA password is still typed into the chat.** QR removes the login code, but not this.
-   Telegram does not cancel 2FA passwords, so it works — and it is deleted on read, with the
-   warning shown first. It remains the weakest moment in the flow (ADR-024).
-11. **Moderation is reactive.** An operator learns about abuse from a report or from a broadcast count
+10. **The driving account cannot connect itself.** ADR-036. Telegram burns any login code it sees
+   an account send in a chat, and there is no sign-in surface outside Telegram any more. Connecting
+   a second account works; connecting the one you message the bot from does not, and the panel says
+   so before you start rather than after a code is spent.
+11. **Credentials typed into the chat.** The login code and any 2FA password are typed, deleted on
+   read, with the warning shown first. Still the weakest moment in the flow (ADR-024).
+12. **Moderation is reactive.** An operator learns about abuse from a report or from a broadcast count
    that looks wrong, not from the system. Content-based detection would mean reading everyone's
    messages, which ADR-032 rules out.

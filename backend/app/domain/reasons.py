@@ -97,8 +97,6 @@ PHONE_NUMBER_UNREGISTERED: Final = "phone_number_unregistered"
 PHONE_NUMBER_FLOOD: Final = "phone_number_flood"
 TWO_FACTOR_REQUIRED: Final = "two_factor_required"
 TWO_FACTOR_PASSWORD_INVALID: Final = "two_factor_password_invalid"  # noqa: S105 - a reason code, not a password
-QR_EXPIRED: Final = "qr_expired"
-QR_NOT_SUPPORTED: Final = "qr_not_supported"
 
 # --- account ----------------------------------------------------------------
 ACCOUNT_SUSPENDED: Final = "account_suspended"
@@ -172,14 +170,15 @@ REASON_TEXT: dict[str, str] = {
         "started by the other person."
     ),
     LOGIN_CODE_INVALID: (
-        "Telegram rejected that login code. The usual cause is not a typo: "
-        "Telegram cancels any code it sees sent inside a Telegram chat, so "
-        "typing it here burns it even when the digits are right. Scan the QR "
-        "code instead — it never puts a code in a chat."
+        "Telegram rejected that login code, and almost certainly not because of "
+        "a typo. Telegram cancels any login code it sees an account send inside "
+        "a chat, so typing it here burns it even when the digits are right. "
+        "Sending it again will fail the same way. This works only when the "
+        "account you are connecting is not the one you are messaging this bot "
+        "from."
     ),
     LOGIN_CODE_EXPIRED: (
-        "That login code has expired. Start the sign-in again to get a new one, "
-        "or use the QR code, which does not expire the same way."
+        "That login code has expired. Cancel the sign-in and start again to get a new one."
     ),
     LOGIN_RESTART_NEEDED: (
         "Telegram asked us to start the sign-in over. Begin again from Accounts."
@@ -204,11 +203,6 @@ REASON_TEXT: dict[str, str] = {
     TWO_FACTOR_PASSWORD_INVALID: (
         "That two-step verification password was not accepted. It is the "
         "password you set in Telegram, not the login code."
-    ),
-    QR_EXPIRED: "The QR code expired before it was scanned. A fresh one has been sent.",
-    QR_NOT_SUPPORTED: (
-        "A bot signs in with its token, so there is no QR code to scan. QR "
-        "sign-in applies to a Telegram account."
     ),
     ACCOUNT_SUSPENDED: (
         "This account is suspended, so nothing is being sent. Messages already "

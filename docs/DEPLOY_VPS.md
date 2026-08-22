@@ -292,24 +292,25 @@ Expected:
 Open Telegram and send `/start` to your admin bot. Everything from here happens
 in that chat.
 
-1. **Accounts → Add account.** Give it a name.
-2. The bot sends a **QR code**. On the phone holding the account you want to
-   connect: **Settings → Devices → Link Desktop Device**, then scan it.
-3. If that account has two-step verification, send the password afterwards. It
-   is used once to finish signing in and is never stored.
-4. **Accounts → (your account) → Sync groups.** This reads the groups the
+1. **Accounts → Add account.** Give it a name, then the phone number of the
+   account you want to connect, with the country code.
+2. Send the login code Telegram delivers to that account, then its two-step
+   verification password if it has one.
+3. **Accounts → (your account) → Sync groups.** This reads the groups the
    account has already joined. Wait a few seconds, then check **Groups**.
+4. If the sign-in fails, open the connection and tap **Cancel sign-in** before
+   trying again — only one sign-in can be in progress at a time.
 5. **Ads → New ad** → name → your message → optionally an image → **Groups** →
    tick them → **Send now**.
 
-A QR is used rather than a login code because **Telegram cancels any login code
-it sees your account send inside a chat** — typing one into the bot burns it, and
-the sign-in fails even though the digits were right. Nothing secret enters the
-conversation with a QR.
+**Important:** Telegram cancels any login code it sees an account send inside a
+chat. So this cannot connect the account you are messaging the bot *from* — it
+fails every time with "the code was previously shared by your account". Connect a
+**different** account, or connect a bot instead.
 
-The 2FA password is the exception: it is typed, deleted the moment it is read,
-and never stored. Telegram's servers held it briefly, which is why the next
-section matters.
+Each credential message is deleted the moment the bot reads it, and the bot says
+so before asking. Telegram's servers still held it briefly, which is why the
+next section matters.
 
 ---
 
