@@ -16,6 +16,7 @@ blocks on Telegram I/O.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -26,6 +27,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.adminbot import qr as qr_flow
 from app.adminbot import secrets, views
 from app.adminbot.states import (
     ComposeAd,
@@ -66,6 +68,10 @@ PARSE_MODE = "MarkdownV2"
 PICK_TARGET = "pick_target"
 
 PICK_HINT = "Tap to select. Only groups this account can post in are listed."
+
+#: Strong references to the detached QR watchers. Without this the event loop
+#: is free to garbage-collect a task while it is still waiting for a scan.
+_WATCHERS: set[asyncio.Task[None]] = set()
 
 
 # --------------------------------------------------------------------------- #
@@ -438,30 +444,126 @@ async def connect_bot_token(
 # --------------------------------------------------------------------------- #
 @router.callback_query(F.data == "add:user")
 async def add_account(query: CallbackQuery, state: FSMContext, **_extra: Any) -> None:
+    """QR is the default sign-in, and the only one that reliably works here.
+
+    Telegram cancels a login code it sees an account send inside a chat, so a
+    code typed into this bot is burned before it can be used. A QR puts nothing
+    secret in the conversation, so there is nothing to cancel.
+    """
     await state.clear()
     await state.set_state(ConnectAccount.label)
+    await state.update_data(method="qr")
     if isinstance(query.message, Message):
         await _ask(
             query.message,
-            "👤 *Add your Telegram account*\n\nWhat should I call it? A short name "
-            "for your own reference, like `Main account`\\.\n\n/cancel to stop\\.",
+            "👤 *Add your Telegram account*\n\n"
+            "You will scan a QR code with the Telegram app — no login code to "
+            "type, which is what makes it work\\.\n\n"
+            "First, what should I call this connection? A short name for your "
+            "own reference, like `Main account`\\.\n\n/cancel to stop\\.",
+        )
+    await query.answer()
+
+
+@router.callback_query(F.data == "add:phone")
+async def add_account_by_phone(query: CallbackQuery, state: FSMContext, **_extra: Any) -> None:
+    """The phone/code sign-in, kept as a fallback and labelled honestly.
+
+    It usually fails when driven from a chat, for the reason above. It does work
+    when the account being connected is *not* the account messaging the bot,
+    because then Telegram never sees that account send its own code.
+    """
+    await state.clear()
+    await state.set_state(ConnectAccount.label)
+    await state.update_data(method="phone")
+    if isinstance(query.message, Message):
+        await _ask(
+            query.message,
+            "📱 *Sign in with a phone number*\n\n"
+            "⚠️ Telegram cancels any login code it sees "
+            "your account send inside a chat, so this usually fails with *the "
+            "code was previously shared*, even when the digits are right\\.\n\n"
+            "It works only if the account you are connecting is *not* the one "
+            "you are messaging me from\\. Otherwise go back and use the QR "
+            "code\\.\n\n"
+            "What should I call this connection?",
         )
     await query.answer()
 
 
 @router.message(ConnectAccount.label)
-async def account_label(message: Message, state: FSMContext, **_extra: Any) -> None:
+async def account_label(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
     label = (message.text or "").strip()
     if not label:
         await _ask(message, "Send a name, or /cancel\\.")
         return
+
+    data = await state.get_data()
     await state.update_data(label=label[:120])
-    await state.set_state(ConnectAccount.phone)
-    await _ask(
-        message,
-        "Send the phone number of that Telegram account, with the country code:\n"
-        "`\\+919876543210`\n\n" + secrets.WARNING,
+
+    if data.get("method") == "phone":
+        await state.set_state(ConnectAccount.phone)
+        await _ask(
+            message,
+            "Send the phone number of that Telegram account, with the country "
+            "code:\n`\\+919876543210`\n\n" + secrets.WARNING,
+        )
+        return
+
+    await _start_qr(message, user_id, state, label=label[:120])
+
+
+async def _start_qr(message: Message, user_id: uuid.UUID, state: FSMContext, *, label: str) -> None:
+    """Create the connection, show the code, and watch for the scan in the
+    background — the wait deliberately outlives this handler."""
+    await state.clear()
+
+    async with session_scope() as session:
+        try:
+            connection, qr = await connection_service.start_qr_connection(
+                session, user_id=user_id, label=label
+            )
+        except connection_service.DuplicateConnectionAttempt:
+            await _ask(
+                message,
+                "Another sign\\-in is already in progress\\. Open *Accounts*, pick "
+                "it, and tap *Cancel sign\\-in* first\\.",
+            )
+            await _go_home(message, user_id)
+            return
+        except connection_service.TooManyConnections as exc:
+            await _ask(message, views.escape(exc.message))
+            await _go_home(message, user_id)
+            return
+        except RuntimeError as exc:
+            # Missing TELEGRAM_API_ID / TELEGRAM_API_HASH says what to do.
+            await _ask(message, f"Cannot start sign\\-in\\.\n\n_{views.escape(str(exc))}_")
+            await _go_home(message, user_id)
+            return
+        except Exception as exc:
+            await _ask(message, f"Cannot start sign\\-in\\.\n\n_{_describe(exc)}_")
+            await _go_home(message, user_id)
+            return
+        connection_id = connection.id
+
+    if message.bot is None:  # pragma: no cover - always set on a real update
+        return
+    await qr_flow.send_code(message.bot, message.chat.id, qr.url, connection_id=connection_id)
+    # Detached on purpose: Telegram's QR tokens expire in seconds, so this loop
+    # keeps issuing fresh codes until one is scanned. Blocking here would freeze
+    # the whole panel for everyone.
+    task = asyncio.create_task(
+        qr_flow.watch(
+            message.bot,
+            chat_id=message.chat.id,
+            user_id=user_id,
+            connection_id=connection_id,
+        )
     )
+    _WATCHERS.add(task)
+    task.add_done_callback(_WATCHERS.discard)
 
 
 @router.message(ConnectAccount.phone)
@@ -714,6 +816,15 @@ async def connection_actions(query: CallbackQuery, user_id: uuid.UUID, **_extra:
                 connection_id=connection.id,
             )
             notice = "Health check queued."
+
+        elif action == "abandon":
+            # No confirmation: there is nothing here to lose, and the customer
+            # is usually stuck precisely because this row exists.
+            await connection_service.abandon(session, connection=connection)
+            connections = await connection_repo.list_for_user(session, user_id=user_id)
+            await _render(query, views.connections_list(connections=connections))
+            await query.answer("Sign-in cleared. You can start again.")
+            return
 
         elif action == "askdel":
             await _render(query, views.confirm_disconnect(connection=connection))

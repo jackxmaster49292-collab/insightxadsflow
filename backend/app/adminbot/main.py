@@ -35,6 +35,16 @@ log = structlog.get_logger(__name__)
 #: The panel needs nothing else; narrowing this avoids pulling irrelevant traffic.
 ALLOWED_UPDATES = ["message", "callback_query"]
 
+#: What Telegram lists behind the ☰ button next to the message box. Registered
+#: at startup so the panel is discoverable without anyone remembering a command.
+COMMANDS = [
+    ("panel", "Open the control panel"),
+    ("ads", "Your ads"),
+    ("rules", "Forwarding rules"),
+    ("cancel", "Stop what you are in the middle of"),
+    ("help", "What this bot does"),
+]
+
 _stop = asyncio.Event()
 
 
@@ -112,6 +122,7 @@ async def run() -> None:
                 ),
             )
 
+        await _register_commands(bot)
         alerts = asyncio.create_task(notifier.run(bot, _stop))
         await build_dispatcher().start_polling(bot, allowed_updates=ALLOWED_UPDATES)
     finally:
@@ -124,6 +135,20 @@ async def run() -> None:
         await close_redis()
         await dispose_engine()
         log.info("adminbot_stopped")
+
+
+async def _register_commands(bot: Bot) -> None:
+    """Publish the ☰ menu.
+
+    Best-effort: a failure here costs discoverability, not function, so it must
+    not stop the panel from starting.
+    """
+    from aiogram.types import BotCommand
+
+    try:
+        await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS])
+    except Exception as exc:  # pragma: no cover - network path
+        log.warning("set_commands_failed", error=exc)
 
 
 def main() -> None:

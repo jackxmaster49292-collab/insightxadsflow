@@ -364,10 +364,20 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
                     InlineKeyboardButton(text="➕ Add account", callback_data="add:user"),
                     InlineKeyboardButton(text="➕ Add bot", callback_data="add:bot"),
                 ],
+                [
+                    InlineKeyboardButton(
+                        text="Add account by phone instead", callback_data="add:phone"
+                    )
+                ],
                 _home_row(),
             ]
         ),
     )
+
+
+#: Statuses meaning "this sign-in never finished". Sync and health checks are
+#: meaningless here; the only useful action is to clear it and start again.
+UNFINISHED = ("pending", "awaiting_code", "awaiting_2fa")
 
 
 def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Screen:
@@ -388,6 +398,24 @@ def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Scr
             "_No groups yet\\. Tap Sync groups — it reads the groups this account "
             "has already joined\\. It never joins anything for you\\._",
         ]
+
+    if connection.status.value in UNFINISHED:
+        lines += [
+            "",
+            "_This sign\\-in never finished, so nothing works on it yet\\. Clear it "
+            "and start again\\._",
+        ]
+        return Screen(
+            "\n".join(lines),
+            _rows(
+                [
+                    InlineKeyboardButton(
+                        text="✖️ Cancel sign-in", callback_data=f"conn:{connection.id}:abandon"
+                    )
+                ],
+                _back("nav:conns"),
+            ),
+        )
 
     return Screen(
         "\n".join(lines),

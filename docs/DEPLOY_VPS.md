@@ -292,21 +292,24 @@ Expected:
 Open Telegram and send `/start` to your admin bot. Everything from here happens
 in that chat.
 
-1. **Accounts → Add account.** Give it a name, then your phone number with the
-   country code.
-2. Telegram sends a login code. **Send it with spaces between the digits** —
-   `1 2 3 4 5`. Telegram cancels a code it sees posted as plain digits in a
-   chat; the bot explains this when it asks.
-3. If the account has two-step verification, send the password when asked. It is
-   used once to finish signing in and is never stored.
+1. **Accounts → Add account.** Give it a name.
+2. The bot sends a **QR code**. On the phone holding the account you want to
+   connect: **Settings → Devices → Link Desktop Device**, then scan it.
+3. If that account has two-step verification, send the password afterwards. It
+   is used once to finish signing in and is never stored.
 4. **Accounts → (your account) → Sync groups.** This reads the groups the
    account has already joined. Wait a few seconds, then check **Groups**.
 5. **Ads → New ad** → name → your message → optionally an image → **Groups** →
    tick them → **Send now**.
 
-Each of those messages is deleted from the chat the moment the bot reads it, and
-the bot says so before asking. Telegram's servers still held it briefly, which is
-why the next section matters.
+A QR is used rather than a login code because **Telegram cancels any login code
+it sees your account send inside a chat** — typing one into the bot burns it, and
+the sign-in fails even though the digits were right. Nothing secret enters the
+conversation with a QR.
+
+The 2FA password is the exception: it is typed, deleted the moment it is read,
+and never stored. Telegram's servers held it briefly, which is why the next
+section matters.
 
 ---
 

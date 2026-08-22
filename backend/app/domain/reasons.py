@@ -87,6 +87,19 @@ AUTO_REPLY_COOLDOWN: Final = "auto_reply_cooldown"
 AUTO_REPLY_DISABLED: Final = "auto_reply_disabled"
 AUTO_REPLY_NOT_PRIVATE: Final = "auto_reply_not_private"
 
+# --- signing in an account --------------------------------------------------
+LOGIN_CODE_INVALID: Final = "login_code_invalid"
+LOGIN_CODE_EXPIRED: Final = "login_code_expired"
+LOGIN_RESTART_NEEDED: Final = "login_restart_needed"
+PHONE_NUMBER_INVALID: Final = "phone_number_invalid"
+PHONE_NUMBER_BANNED: Final = "phone_number_banned"
+PHONE_NUMBER_UNREGISTERED: Final = "phone_number_unregistered"
+PHONE_NUMBER_FLOOD: Final = "phone_number_flood"
+TWO_FACTOR_REQUIRED: Final = "two_factor_required"
+TWO_FACTOR_PASSWORD_INVALID: Final = "two_factor_password_invalid"  # noqa: S105 - a reason code, not a password
+QR_EXPIRED: Final = "qr_expired"
+QR_NOT_SUPPORTED: Final = "qr_not_supported"
+
 # --- account ----------------------------------------------------------------
 ACCOUNT_SUSPENDED: Final = "account_suspended"
 
@@ -157,6 +170,45 @@ REASON_TEXT: dict[str, str] = {
     AUTO_REPLY_NOT_PRIVATE: (
         "Not replied: automatic replies are only ever sent in a private chat "
         "started by the other person."
+    ),
+    LOGIN_CODE_INVALID: (
+        "Telegram rejected that login code. The usual cause is not a typo: "
+        "Telegram cancels any code it sees sent inside a Telegram chat, so "
+        "typing it here burns it even when the digits are right. Scan the QR "
+        "code instead — it never puts a code in a chat."
+    ),
+    LOGIN_CODE_EXPIRED: (
+        "That login code has expired. Start the sign-in again to get a new one, "
+        "or use the QR code, which does not expire the same way."
+    ),
+    LOGIN_RESTART_NEEDED: (
+        "Telegram asked us to start the sign-in over. Begin again from Accounts."
+    ),
+    PHONE_NUMBER_INVALID: (
+        "Telegram does not recognise that phone number. Include the country "
+        "code, for example +919876543210."
+    ),
+    PHONE_NUMBER_BANNED: (
+        "Telegram has banned that phone number, so it cannot be connected. "
+        "Nothing here can change that; contact Telegram support."
+    ),
+    PHONE_NUMBER_UNREGISTERED: (
+        "That phone number has no Telegram account. Sign up in the Telegram app "
+        "first, then connect it here."
+    ),
+    PHONE_NUMBER_FLOOD: (
+        "Telegram has temporarily blocked sign-in attempts for that number "
+        "after too many tries. Wait — usually a day — before trying again."
+    ),
+    TWO_FACTOR_REQUIRED: "This account has two-step verification. Send the password to continue.",
+    TWO_FACTOR_PASSWORD_INVALID: (
+        "That two-step verification password was not accepted. It is the "
+        "password you set in Telegram, not the login code."
+    ),
+    QR_EXPIRED: "The QR code expired before it was scanned. A fresh one has been sent.",
+    QR_NOT_SUPPORTED: (
+        "A bot signs in with its token, so there is no QR code to scan. QR "
+        "sign-in applies to a Telegram account."
     ),
     ACCOUNT_SUSPENDED: (
         "This account is suspended, so nothing is being sent. Messages already "

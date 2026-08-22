@@ -352,6 +352,42 @@ limiter.
 product or monetization limit, and the guard test that bans plan/quota/tier
 vocabulary still passes.
 
+### ADR-034 — QR is the account sign-in; the phone code cannot work from a chat
+**Context.** The phone/code flow failed in production with Telegram replying
+*"the code was entered correctly, but sign in was not allowed, because this code
+was previously shared by your account"*. Telegram cancels any login code it sees
+an account send inside a Telegram chat. Since the panel **is** a Telegram chat,
+typing the code there burns it before it can be used. The earlier mitigation —
+asking people to space out the digits — does not work; Telegram's detection is
+not a digit-pattern match.
+**Decision.** QR sign-in becomes the default: the bot sends a QR image, the
+customer scans it from *Settings → Devices → Link Desktop Device*, and Telethon
+completes the login. Nothing secret enters the conversation, so there is no code
+to cancel. Telegram's tokens expire in seconds, so a detached watcher refreshes
+the code until it is scanned or the attempt times out. The phone route is kept
+behind its own button, labelled with why it usually fails and when it does work
+— connecting an account that is *not* the one messaging the bot.
+**Consequence.** Sign-in works from inside Telegram without weakening anything;
+if anything it is stronger, since a QR cannot be forwarded to an attacker the
+way a code can. Costs: one small pure-Python dependency (``segno``) to render
+the image, and a background task per attempt. A 2FA password is still typed,
+because Telegram does not cancel those — it is deleted on read as before.
+
+### ADR-035 — A failed sign-in must be clearable from the panel
+**Context.** A partial unique index allows one in-progress connection attempt
+per account. When the phone sign-in failed it left a row in ``awaiting_code``
+forever, so every retry was refused with "already in progress" — and the panel
+offered no way to remove it. The deployment was stuck with no path forward.
+**Decision.** A connection in ``pending`` / ``awaiting_code`` / ``awaiting_2fa``
+shows exactly one action, *Cancel sign-in*, which deletes the row and drops the
+held client. Sync and health checks are hidden there, since neither means
+anything on an account that never signed in. No confirmation: there is nothing
+to lose, and the customer is usually looking at it precisely because they are
+stuck.
+**Consequence.** Every dead end in the sign-in flow now has an exit. The QR
+watcher also clears the attempt on timeout or hard failure, so the common case
+does not need the button at all.
+
 ---
 
 ## Open tradeoffs
@@ -380,6 +416,9 @@ vocabulary still passes.
    engineering fix that is not evasion — proxy rotation is explicitly out of scope — so the mitigation
    is operational: keep the population small enough to know, and suspend accounts that misuse it.
    ``ACCESS_MODE=open`` prints this warning at startup and in `deploy.sh`.
-10. **Moderation is reactive.** An operator learns about abuse from a report or from a broadcast count
+10. **A 2FA password is still typed into the chat.** QR removes the login code, but not this.
+   Telegram does not cancel 2FA passwords, so it works — and it is deleted on read, with the
+   warning shown first. It remains the weakest moment in the flow (ADR-024).
+11. **Moderation is reactive.** An operator learns about abuse from a report or from a broadcast count
    that looks wrong, not from the system. Content-based detection would mean reading everyone's
    messages, which ADR-032 rules out.

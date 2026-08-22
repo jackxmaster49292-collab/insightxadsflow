@@ -29,6 +29,7 @@ from app.adapters.base import (
     InboundMessage,
     MediaType,
     PeerKind,
+    QrLogin,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import AdapterError, ClassifiedError, ErrorClass, classify_error
@@ -126,10 +127,58 @@ class UserAdapter:
         )
 
     async def start_login(self, phone: str) -> str:
-        """Sends the login code. Returns the ``phone_code_hash`` to carry forward."""
+        """Sends the login code. Returns the ``phone_code_hash`` to carry forward.
+
+        Worth knowing before choosing this over QR: Telegram cancels any login
+        code it sees an account send inside a Telegram chat. Completing a
+        sign-in by typing the code into a bot therefore fails with
+        ``PhoneCodeInvalid`` even when the digits are correct — the code was
+        burned in transit. That protection is deliberate and is not worked
+        around here.
+        """
         await self._client.connect()
         sent = await self._client.send_code_request(phone)
         return str(sent.phone_code_hash)
+
+    async def start_qr_login(self) -> QrLogin:
+        """Begin a QR sign-in.
+
+        Telegram's own device-linking flow, and the only sign-in that works from
+        inside a chat: nothing secret is ever typed, so there is no code for
+        Telegram to cancel. The customer scans from an app they are already
+        signed in to, which is a stronger proof than a code they could be talked
+        into forwarding to someone else.
+        """
+        await self._client.connect()
+        login = await self._client.qr_login()
+        return QrLogin(url=str(login.url), handle=login)
+
+    async def wait_for_qr(self, login: QrLogin, *, timeout_s: float) -> ConnectionState:
+        """Block until the QR is scanned, or the wait runs out.
+
+        A timeout is not a failure — the token simply expired and can be
+        refreshed. Only ``TwoFactorRequired`` means the scan succeeded and a
+        password is still needed.
+        """
+        from telethon.errors import SessionPasswordNeededError
+
+        try:
+            await login.handle.wait(timeout=timeout_s)
+        except SessionPasswordNeededError as exc:
+            raise TwoFactorRequired from exc
+        me = await self._client.get_me()
+        return ConnectionState(
+            status="active",
+            account_id=int(me.id),
+            username=getattr(me, "username", None),
+            session_string=self.session_string,
+        )
+
+    async def refresh_qr(self, login: QrLogin) -> QrLogin:
+        """Telegram's QR tokens expire in well under a minute; this issues a new
+        one on the same client, so the sign-in continues rather than restarting."""
+        await login.handle.recreate()
+        return QrLogin(url=str(login.handle.url), handle=login.handle)
 
     async def complete_login(self, phone: str, code: str, phone_code_hash: str) -> ConnectionState:
         from telethon.errors import SessionPasswordNeededError

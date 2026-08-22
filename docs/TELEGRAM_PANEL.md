@@ -54,20 +54,41 @@ By default only those ids can use the bot at all. To let other people in, see
 
 ### 2.2 Connect an account
 
-Send `/start`, tap **Accounts → Add account**, and follow the prompts:
+Send `/start`, tap **Accounts → Add account**, give it a name, and the bot sends
+you a **QR code**. On the phone holding the account you want to connect:
 
-1. a name for your own reference;
-2. the phone number, with country code;
-3. the login code Telegram sends you;
-4. the two-step verification password, if the account has one.
+**Settings → Devices → Link Desktop Device**, then scan it.
 
-**Send the login code with spaces or dashes between the digits** — `1 2 3 4 5`.
-Telegram cancels a login code it sees posted as plain digits in a chat. That
-protection is on your side; the prompt says so and asks you to work with it.
+If the account has two-step verification, send that password afterwards. It is
+used once and never stored.
 
-Adding a bot instead is the same flow with a token from @BotFather. A bot can
-only post in groups where you have added it as an administrator; an account can
-post anywhere it has already joined.
+#### Why a QR and not a login code
+
+Telegram **cancels any login code it sees your account send inside a chat**. So
+typing the code into this bot burns it, and the sign-in fails with *"the code
+was previously shared by your account"* even though the digits were right.
+
+That protection is working as intended and is not worked around here. A QR
+simply has no code to leak — nothing secret enters the conversation at all.
+
+The codes expire in seconds, so the bot keeps sending fresh ones until you scan.
+If you take too long it stops and clears the attempt so you can start again.
+
+**Accounts → Add account by phone instead** is still there. It works only when
+the account you are connecting is *not* the one you are messaging the bot from,
+because then Telegram never sees that account send its own code.
+
+#### Adding a bot
+
+Same flow with a token from @BotFather. A bot can only post in groups where you
+have added it as an administrator; an account can post anywhere it has already
+joined.
+
+#### If a sign-in gets stuck
+
+Only one sign-in can be in progress at a time. If one fails and is left behind,
+open **Accounts**, tap that connection, and use **Cancel sign-in** — then start
+again.
 
 ### 2.3 Sync groups
 

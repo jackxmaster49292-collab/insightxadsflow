@@ -75,6 +75,21 @@ _BY_EXCEPTION_NAME: dict[str, tuple[ErrorClass, str]] = {
     "UserDeactivatedError": (ErrorClass.AUTH, "user_deactivated"),
     "UserDeactivatedBanError": (ErrorClass.AUTH, "user_deactivated_ban"),
     "UnauthorizedError": (ErrorClass.AUTH, "unauthorized"),
+    # --- sign-in, which has its own failures and its own explanations ---
+    # A login code Telegram has already burned. The usual cause is the code
+    # having been typed into a Telegram chat: Telegram sees the account send it
+    # and refuses the sign-in even though the digits were right.
+    "PhoneCodeInvalidError": (ErrorClass.AUTH, "login_code_invalid"),
+    "PhoneCodeExpiredError": (ErrorClass.AUTH, "login_code_expired"),
+    "PhoneCodeEmptyError": (ErrorClass.AUTH, "login_code_invalid"),
+    "AuthRestartError": (ErrorClass.AUTH, "login_restart_needed"),
+    "PhoneNumberInvalidError": (ErrorClass.AUTH, "phone_number_invalid"),
+    "PhoneNumberBannedError": (ErrorClass.AUTH, "phone_number_banned"),
+    "PhoneNumberUnoccupiedError": (ErrorClass.AUTH, "phone_number_unregistered"),
+    "PhoneNumberFloodError": (ErrorClass.RATE_LIMIT, "phone_number_flood"),
+    "PasswordHashInvalidError": (ErrorClass.AUTH, "two_factor_password_invalid"),
+    "SessionPasswordNeededError": (ErrorClass.AUTH, "two_factor_required"),
+    "QrTokenExpiredError": (ErrorClass.AUTH, "qr_expired"),
     "ChatWriteForbiddenError": (ErrorClass.PERMISSION, "write_forbidden"),
     "ChatAdminRequiredError": (ErrorClass.PERMISSION, "admin_required"),
     "ChatSendMediaForbiddenError": (ErrorClass.PERMISSION, "send_media_forbidden"),

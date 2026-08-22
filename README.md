@@ -141,10 +141,11 @@ you obtain from [my.telegram.org](https://my.telegram.org), are documented in
 messages from channels where they are a member) and grant post rights in each destination. For groups,
 either make it an admin or disable privacy mode, or it will only see commands and replies.
 
-**User account:** get an `api_id` and `api_hash` from my.telegram.org, then connect in the bot with
-your phone number, the login code, and your 2FA password if you have one. Send the login code with
-spaces between the digits (`1 2 3 4 5`) — Telegram cancels a code it sees posted as plain digits in a
-chat, and the prompt explains why. Your 2FA password is used once in memory
+**User account:** get an `api_id` and `api_hash` from my.telegram.org, then connect in the bot by
+scanning a **QR code** — *Settings → Devices → Link Desktop Device* in the Telegram app. A login code
+is deliberately not used: Telegram cancels any code it sees your account send inside a chat, so typing
+one into a bot burns it. A QR puts nothing secret in the conversation. If the account has two-step
+verification, that password is typed once, deleted on read, and never stored. Your 2FA password is used once in memory
 to complete sign-in and is **never stored, hashed, or logged**. Session material is encrypted at rest
 with envelope encryption and can be revoked from the panel, which also calls `auth.logOut` so Telegram
 invalidates it server-side.

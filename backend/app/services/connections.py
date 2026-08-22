@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.base import ConnectionState, TelegramAdapter
+from app.adapters.base import ConnectionState, QrLogin, TelegramAdapter
 from app.adapters.factory import build_adapter
 from app.config import get_settings
 from app.db.models import ConnectionKind, ConnectionStatus, TelegramConnection
@@ -36,6 +36,11 @@ class DuplicateConnectionAttempt(Exception):
 
 class ConnectionNotReady(Exception):
     pass
+
+
+class QrExpired(Exception):
+    """The QR token aged out before anyone scanned it. Not a failure — the
+    sign-in continues with a fresh token."""
 
 
 class TooManyConnections(Exception):
@@ -80,6 +85,8 @@ class PendingLogin:
     phone: str
     phone_code_hash: str
     adapter: TelegramAdapter | None = None
+    #: Set for a QR sign-in instead of a phone/code one.
+    qr: QrLogin | None = None
 
 
 _PENDING_LOGINS: dict[uuid.UUID, PendingLogin] = {}
@@ -183,6 +190,90 @@ async def start_user_connection(
         PendingLogin(phone=phone, phone_code_hash=phone_code_hash, adapter=adapter),
     )
     return connection
+
+
+async def start_qr_connection(
+    session: AsyncSession, *, user_id: uuid.UUID, label: str
+) -> tuple[TelegramConnection, QrLogin]:
+    """Begin a QR sign-in and return the code to display.
+
+    Preferred over the phone flow when the panel is a Telegram chat: Telegram
+    cancels any login code it sees an account send in a chat, so typing one into
+    a bot burns it. A QR puts nothing secret in the conversation at all.
+    """
+    if await connection_repo.has_in_progress_attempt(session, user_id=user_id):
+        raise DuplicateConnectionAttempt
+    await _enforce_connection_cap(session, user_id=user_id)
+
+    if get_settings().live_telegram:
+        get_settings().require_mtproto_credentials()
+
+    connection = await connection_repo.create(
+        session,
+        user_id=user_id,
+        kind=ConnectionKind.user,
+        label=label,
+        status=ConnectionStatus.awaiting_code,
+    )
+    await session.flush()
+
+    adapter = await adapter_for(session, connection)
+    qr = await adapter.start_qr_login()
+    # The client that issued the token has to be the one that completes the
+    # sign-in, so it is kept alongside — same reason as the phone flow.
+    remember_login(
+        connection.id, PendingLogin(phone="", phone_code_hash="", adapter=adapter, qr=qr)
+    )
+    return connection, qr
+
+
+async def await_qr_scan(
+    session: AsyncSession, *, connection: TelegramConnection, timeout_s: float
+) -> ConnectionStatus:
+    """Wait for the scan. Raises ``QrExpired`` when the token aged out."""
+    pending = take_login(connection.id)
+    if pending is None or pending.adapter is None or pending.qr is None:
+        raise ConnectionNotReady("No QR sign-in is in progress for this connection.")
+
+    from app.adapters.user import TwoFactorRequired
+
+    try:
+        state = await pending.adapter.wait_for_qr(pending.qr, timeout_s=timeout_s)
+    except TwoFactorRequired:
+        connection.status = ConnectionStatus.awaiting_2fa
+        # The adapter and its half-authenticated session must survive until the
+        # password step, so the pending record stays put.
+        return ConnectionStatus.awaiting_2fa
+    except TimeoutError as exc:
+        raise QrExpired from exc
+
+    await _finalize_user(session, connection=connection, state=state)
+    return ConnectionStatus.active
+
+
+async def refresh_qr(connection_id: uuid.UUID) -> QrLogin:
+    """Issue a new token on the same client, so the sign-in continues."""
+    pending = take_login(connection_id)
+    if pending is None or pending.adapter is None or pending.qr is None:
+        raise ConnectionNotReady("No QR sign-in is in progress for this connection.")
+    qr = await pending.adapter.refresh_qr(pending.qr)
+    remember_login(
+        connection_id,
+        PendingLogin(phone="", phone_code_hash="", adapter=pending.adapter, qr=qr),
+    )
+    return qr
+
+
+async def abandon(session: AsyncSession, *, connection: TelegramConnection) -> None:
+    """Drop a half-finished connection attempt.
+
+    Without this a sign-in that fails — which the phone flow does routinely,
+    because Telegram cancels codes posted in chats — leaves a row in
+    ``awaiting_code`` forever. The partial unique index then refuses every new
+    attempt with "already in progress", and there is no way out from the panel.
+    """
+    forget_login(connection.id)
+    await session.delete(connection)
 
 
 async def verify_user_code(
