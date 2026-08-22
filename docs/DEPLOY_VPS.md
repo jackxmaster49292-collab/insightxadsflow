@@ -222,7 +222,7 @@ no `psql` user creation. Compose did it.
 One command creates the tables:
 
 ```bash
-docker compose exec api alembic upgrade head
+docker compose run --rm api alembic upgrade head
 ```
 
 That is the whole database setup. Verify:
@@ -320,7 +320,7 @@ Deploy an update:
 cd ~/insightadsflow
 git pull
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-docker compose exec api alembic upgrade head
+docker compose run --rm api alembic upgrade head
 ```
 
 ---
@@ -380,7 +380,7 @@ docker compose logs worker | head -20
 | `The database host 'postgres' is the correct name, but it does not resolve` **after retrying for 60s** | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
 | `Cannot resolve the database host 'db'` | `DATABASE_URL` is set in `.env` and points at a host that does not exist inside the Docker network. **Delete the line** — Compose sets it for every service. Verify with `docker compose config \| grep DATABASE_URL` |
 | `Postgres rejected the password` | `POSTGRES_PASSWORD` was changed *after* the volume was created. Postgres only applies it when initialising a new data directory. Restore the old password, or `docker compose down -v` to start fresh — **that deletes all data** |
-| `The database is reachable but has no tables yet` | Run `docker compose exec api alembic upgrade head` |
+| `The database is reachable but has no tables yet` | Run `docker compose run --rm api alembic upgrade head` |
 | `Nothing is listening on the database host` | `docker compose ps` — the postgres container is not up |
 
 > The most common cause is a stale `DATABASE_URL` or `REDIS_URL` in `.env`. Both

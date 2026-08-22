@@ -71,6 +71,14 @@ fi
 # Data services first, and wait for them to be genuinely healthy. Starting
 # everything at once is what produces "host 'postgres' does not resolve": the
 # workers come up before the database container exists.
+# An earlier version of this project used Compose's implicit default network.
+# If that one is still around, containers can end up split across two bridges —
+# and a container on the old one cannot resolve "postgres" on the new one.
+if docker network inspect insight-store_default >/dev/null 2>&1; then
+  warn "removing stale network insight-store_default from an older layout"
+  docker network rm insight-store_default >/dev/null 2>&1 || true
+fi
+
 say "Starting postgres and redis"
 "${COMPOSE[@]}" up -d postgres redis
 

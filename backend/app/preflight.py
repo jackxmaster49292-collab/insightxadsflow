@@ -128,7 +128,7 @@ def explain_database_failure(exc: BaseException, dsn: str) -> str:
     if "does not exist" in str(exc):
         return (
             f"The database named in DATABASE_URL does not exist on {host!r}.\n\n"
-            "Create the schema with:  docker compose exec api alembic upgrade head"
+            "Create the schema with:  docker compose run --rm api alembic upgrade head"
         )
 
     return f"Could not connect to the database at {host!r}: {name}"
@@ -196,7 +196,7 @@ async def check_schema() -> None:
         raise PreflightError(
             "The database is reachable but has no tables yet.\n\n"
             "Create the schema before starting the workers:\n"
-            "  docker compose exec api alembic upgrade head"
+            "  docker compose run --rm api alembic upgrade head"
         )
 
 

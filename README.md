@@ -88,7 +88,7 @@ Paste that into `.env`, then bring up the whole stack:
 
 ```bash
 docker compose up -d --build
-docker compose exec api alembic upgrade head
+docker compose run --rm api alembic upgrade head
 docker compose exec api python -m app.seed
 ```
 
