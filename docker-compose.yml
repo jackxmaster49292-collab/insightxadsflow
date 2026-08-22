@@ -15,6 +15,7 @@ x-backend: &backend
     redis:
       condition: service_healthy
   restart: unless-stopped
+  networks: [insight]
 
 services:
   postgres:
@@ -33,6 +34,7 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    networks: [insight]
 
   redis:
     image: redis:8-alpine
@@ -44,6 +46,7 @@ services:
       timeout: 3s
       retries: 20
     restart: unless-stopped
+    networks: [insight]
 
   api:
     <<: *backend
@@ -92,6 +95,14 @@ services:
     ports: ["8080:80"]
     depends_on: [api]
     restart: unless-stopped
+    networks: [insight]
+
+# One explicit network for everything. Compose would create a default anyway,
+# but naming it makes the guarantee visible: every service resolves every other
+# by its service name, which is what DATABASE_URL=...@postgres:5432 relies on.
+networks:
+  insight:
+    driver: bridge
 
 volumes:
   pgdata:

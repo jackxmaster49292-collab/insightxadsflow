@@ -19,8 +19,12 @@ os.environ.setdefault("ENCRYPTION_KEK", base64.b64encode(b"k" * 32).decode())
 os.environ.setdefault("ENCRYPTION_KEK_VERSION", "1")
 os.environ.setdefault("APP_SECRET_KEY", "test-secret-key-not-used-in-production")
 os.environ.setdefault("COOKIE_SECURE", "false")
+# Honour POSTGRES_PASSWORD so the suite still runs against a stack started with
+# a custom password. Hardcoding "insight" here meant the tests broke for anyone
+# who followed the deployment guide and set one.
+_PW = os.environ.get("POSTGRES_PASSWORD", "insight")
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql+asyncpg://insight:insight@localhost:5433/insight_test"
+    "DATABASE_URL", f"postgresql+asyncpg://insight:{_PW}@localhost:5433/insight_test"
 )
 os.environ.setdefault("REDIS_URL", "redis://localhost:6380/1")
 

@@ -38,9 +38,43 @@ def test_unresolvable_host_names_the_host_and_the_fix():
     assert "docker compose config" in message, "must give a command to verify with"
 
 
-def test_unresolvable_host_explains_why_editing_env_does_nothing():
-    message = explain_database_failure(socket.gaierror(-2, "Name or service not known"), DSN)
+def test_unresolvable_wrong_host_explains_why_editing_env_does_nothing():
+    message = explain_database_failure(
+        socket.gaierror(-2, "Name or service not known"),
+        "postgresql+asyncpg://insight:pw@db:5432/insight",
+    )
     assert "Compose already sets DATABASE_URL" in message
+
+
+def test_correct_host_that_does_not_resolve_blames_the_container_not_the_name():
+    """The reported second failure. 'postgres' IS the right name, so repeating
+    "use postgres" sends the operator to fix something that is not broken —
+    Docker DNS simply does not answer for a container that is not running."""
+    message = explain_database_failure(socket.gaierror(-2, "Name or service not known"), DSN)
+
+    assert "correct name" in message
+    assert "not up" in message
+    assert "docker compose ps" in message
+    assert "docker compose logs postgres" in message
+    # Must not repeat the wrong-hostname advice.
+    assert "not 'db', and not 'localhost'" not in message
+
+
+def test_the_two_dns_failures_give_different_advice():
+    """They look identical in the traceback and have opposite fixes, so the
+    messages must not converge."""
+    wrong_host = explain_database_failure(
+        socket.gaierror(-2, "x"), "postgresql+asyncpg://u:p@db:5432/d"
+    )
+    right_host_down = explain_database_failure(socket.gaierror(-2, "x"), DSN)
+    assert wrong_host != right_host_down
+
+
+def test_redis_host_is_also_treated_as_a_compose_service():
+    message = explain_database_failure(
+        socket.gaierror(-2, "x"), "postgresql+asyncpg://u:p@redis:5432/d"
+    )
+    assert "correct name" in message
 
 
 def test_wrong_password_points_at_the_volume_not_the_password():

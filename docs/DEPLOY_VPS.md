@@ -185,18 +185,26 @@ TELEGRAM_PROVIDER=live
 ## Step 6 — Start it
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+./deploy.sh
 ```
 
-First run takes a few minutes (building images, Caddy fetching a certificate).
+That is the whole thing. The script builds, starts postgres and redis, **waits
+for them to be genuinely ready**, checks the database is usable, applies
+migrations, starts everything else, and then reports honestly — including
+dumping the logs of anything that is crash-looping.
 
-Check everything is up:
+Order matters here. Starting all containers at once is what produces
+`host 'postgres' does not resolve`: the workers come up before the database
+container exists, and Docker's DNS does not answer for a container that is not
+running yet.
 
 ```bash
-docker compose ps
+./deploy.sh --rebuild   # force a clean image rebuild
+./deploy.sh --status    # what is running
+./deploy.sh --logs      # follow the backend logs
 ```
 
-You want `postgres` and `redis` showing **healthy**, and the rest **Up**.
+Re-running it is safe and never deletes data.
 
 ---
 
@@ -364,6 +372,7 @@ docker compose logs worker | head -20
 
 | Message | What to do |
 |---|---|
+| `The database host 'postgres' is the correct name, but it does not resolve` | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
 | `Cannot resolve the database host 'db'` | `DATABASE_URL` is set in `.env` and points at a host that does not exist inside the Docker network. **Delete the line** — Compose sets it for every service. Verify with `docker compose config \| grep DATABASE_URL` |
 | `Postgres rejected the password` | `POSTGRES_PASSWORD` was changed *after* the volume was created. Postgres only applies it when initialising a new data directory. Restore the old password, or `docker compose down -v` to start fresh — **that deletes all data** |
 | `The database is reachable but has no tables yet` | Run `docker compose exec api alembic upgrade head` |

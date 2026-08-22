@@ -24,6 +24,7 @@ services:
       # variable is unset, so an empty value would produce an unparseable
       # site address.
       PANEL_DOMAIN: ${PANEL_DOMAIN:-:80}
+    networks: [insight]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

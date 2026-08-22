@@ -5,12 +5,15 @@ internals ending in ``socket.gaierror: [Errno -2] Name or service not known``,
 which says nothing about what to change. Every process runs this first and turns
 the common failures into one actionable line.
 
-The three that actually happen in practice:
+The ones that actually happen in practice:
 
 * wrong hostname — ``db`` or ``localhost`` instead of the compose service name;
+* right hostname, container down — Docker DNS only answers for running
+  containers, so this looks identical to a typo but has a different fix;
 * wrong password — ``POSTGRES_PASSWORD`` changed after the volume already
   existed, so Postgres still expects the original;
-* nothing listening — the database container is not up yet.
+* nothing listening — the database container is not up yet;
+* no tables — ``alembic upgrade head`` has not been run.
 """
 
 from __future__ import annotations
@@ -24,6 +27,11 @@ import structlog
 from app.config import get_settings
 
 log = structlog.get_logger(__name__)
+
+#: Hostnames Compose is expected to provide. If one of these fails to resolve
+#: the name is right and the container is wrong — a completely different fix
+#: from "you typed the wrong host", so the two must not share a message.
+COMPOSE_SERVICE_HOSTS = frozenset({"postgres", "redis"})
 
 
 class PreflightError(Exception):
@@ -47,6 +55,28 @@ def explain_database_failure(exc: BaseException, dsn: str) -> str:
         or "gaierror" in name
         or "Name or service not known" in str(exc)
     ):
+        if host in COMPOSE_SERVICE_HOSTS:
+            # The name is right, so this is not a typo in the configuration.
+            # Docker's DNS only answers for containers that are running and on
+            # the same network — a completely different fix, so it must not
+            # share a message with the wrong-hostname case.
+            return (
+                f"The database host {host!r} is the correct name, but it does "
+                "not resolve.\n\n"
+                "Docker's DNS only answers for containers that are running and "
+                f"attached to the same network. So {host!r} failing to resolve "
+                "means that container is not up — not that the name is wrong.\n\n"
+                "Check, in order:\n"
+                f"  docker compose ps                  # is {host} running?\n"
+                f"  docker compose logs {host}         # why did it stop?\n"
+                "  docker compose config --services   # is it even defined?\n\n"
+                "The usual cause is starting the stack with only one compose "
+                "file. Always use both:\n"
+                "  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d\n\n"
+                "The prod file alone does not define postgres or redis at all.\n"
+                "Or just run:  ./deploy.sh"
+            )
+
         return (
             f"Cannot resolve the database host {host!r}.\n\n"
             "Inside Docker the host must be the compose service name, which in "
@@ -149,11 +179,12 @@ async def check_redis() -> None:
         ) from exc
 
 
-async def run(*, require_redis: bool = True) -> None:
+async def run(*, require_redis: bool = True, require_schema: bool = True) -> None:
     """Check everything, or exit with a readable explanation."""
     try:
         await check_database()
-        await check_schema()
+        if require_schema:
+            await check_schema()
         if require_redis:
             await check_redis()
     except PreflightError as exc:
@@ -167,3 +198,36 @@ async def run(*, require_redis: bool = True) -> None:
         raise SystemExit(1) from exc
 
     log.info("preflight_ok", database=True, redis=require_redis)
+
+
+def main() -> None:
+    """``python -m app.preflight [--no-schema]``
+
+    Run by deploy.sh before migrations, so a bad database configuration is
+    reported in plain language instead of surfacing as an alembic traceback.
+    ``--no-schema`` skips the tables check, which has not been created yet at
+    that point in a first deployment.
+    """
+    import asyncio
+    import sys
+
+    from app.logging_setup import configure_logging
+
+    configure_logging(json_output=False)
+    require_schema = "--no-schema" not in sys.argv
+
+    async def go() -> None:
+        from app.db.session import dispose_engine
+        from app.security.ratelimit import close_redis
+
+        try:
+            await run(require_schema=require_schema)
+        finally:
+            await close_redis()
+            await dispose_engine()
+
+    asyncio.run(go())
+
+
+if __name__ == "__main__":
+    main()
