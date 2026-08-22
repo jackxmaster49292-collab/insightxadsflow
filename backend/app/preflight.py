@@ -18,8 +18,10 @@ The ones that actually happen in practice:
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import sys
+import time
 from urllib.parse import urlparse
 
 import structlog
@@ -35,7 +37,17 @@ COMPOSE_SERVICE_HOSTS = frozenset({"postgres", "redis"})
 
 
 class PreflightError(Exception):
-    """Carries a message meant for a human, not a stack trace."""
+    """Carries a message meant for a human, not a stack trace.
+
+    ``transient`` marks failures that can heal on their own — a container that
+    is still starting, or Docker DNS that has not caught up with a freshly
+    created network. Those are worth retrying. A rejected password or a missing
+    database never fixes itself, so retrying only delays the real message.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 def _host_of(dsn: str) -> str | None:
@@ -122,6 +134,28 @@ def explain_database_failure(exc: BaseException, dsn: str) -> str:
     return f"Could not connect to the database at {host!r}: {name}"
 
 
+def _is_transient(exc: BaseException) -> bool:
+    """Can this failure resolve itself if we simply wait?
+
+    A container that has not finished starting, or a name that Docker's DNS has
+    not published yet, will. Bad credentials will not.
+    """
+    name = type(exc).__name__
+    text = str(exc)
+    if "InvalidPassword" in name or "password authentication failed" in text:
+        return False
+    if "does not exist" in text:
+        return False
+    return (
+        isinstance(exc, socket.gaierror)
+        or "gaierror" in name
+        or "Name or service not known" in text
+        or "ConnectionRefused" in name
+        or "Connect call failed" in text
+        or "refused" in text.lower()
+    )
+
+
 async def check_database() -> None:
     from sqlalchemy import text
 
@@ -132,7 +166,10 @@ async def check_database() -> None:
         async with get_engine().connect() as connection:
             await connection.execute(text("SELECT 1"))
     except Exception as exc:
-        raise PreflightError(explain_database_failure(exc, settings.database_url)) from exc
+        raise PreflightError(
+            explain_database_failure(exc, settings.database_url),
+            transient=_is_transient(exc),
+        ) from exc
 
 
 async def check_schema() -> None:
@@ -175,29 +212,66 @@ async def check_redis() -> None:
             f"Cannot reach Redis at {host!r}: {type(exc).__name__}.\n\n"
             "Inside Docker the host must be the compose service name 'redis'. "
             "Compose sets REDIS_URL for you, so a REDIS_URL line in .env is only "
-            "for running outside Docker."
+            "for running outside Docker.",
+            transient=_is_transient(exc),
         ) from exc
 
 
-async def run(*, require_redis: bool = True, require_schema: bool = True) -> None:
-    """Check everything, or exit with a readable explanation."""
-    try:
-        await check_database()
-        if require_schema:
-            await check_schema()
-        if require_redis:
-            await check_redis()
-    except PreflightError as exc:
-        # Deliberately print rather than log: this is the first thing an operator
-        # sees in `docker compose logs`, and it should not be buried in JSON.
-        print("\n" + "=" * 72, file=sys.stderr)
-        print("STARTUP CHECK FAILED", file=sys.stderr)
-        print("=" * 72, file=sys.stderr)
-        print(str(exc), file=sys.stderr)
-        print("=" * 72 + "\n", file=sys.stderr)
-        raise SystemExit(1) from exc
+#: How long to keep retrying a failure that can heal. Docker publishes a name on
+#: a freshly created network within a second or two on a fast machine, but a
+#: loaded VPS can take noticeably longer — and checking once, immediately after
+#: creating the network, is a race we lost in production.
+STARTUP_GRACE_S = 60
+RETRY_INTERVAL_S = 3
 
-    log.info("preflight_ok", database=True, redis=require_redis)
+
+async def run(*, require_redis: bool = True, require_schema: bool = True) -> None:
+    """Check everything, or exit with a readable explanation.
+
+    Transient failures are retried for up to :data:`STARTUP_GRACE_S`; a rejected
+    password or a missing schema fails immediately, because waiting cannot help
+    and the operator should see the real reason at once.
+    """
+    deadline = time.monotonic() + STARTUP_GRACE_S
+    attempt = 0
+
+    while True:
+        attempt += 1
+        try:
+            await check_database()
+            if require_schema:
+                await check_schema()
+            if require_redis:
+                await check_redis()
+            break
+        except PreflightError as exc:
+            if exc.transient and time.monotonic() < deadline:
+                log.info(
+                    "preflight_retry",
+                    attempt=attempt,
+                    seconds_left=int(deadline - time.monotonic()),
+                    detail=str(exc).splitlines()[0],
+                )
+                await asyncio.sleep(RETRY_INTERVAL_S)
+                continue
+
+            # Deliberately print rather than log: this is the first thing an
+            # operator sees in `docker compose logs`, and it should not be
+            # buried in JSON.
+            print("\n" + "=" * 72, file=sys.stderr)
+            print("STARTUP CHECK FAILED", file=sys.stderr)
+            print("=" * 72, file=sys.stderr)
+            print(str(exc), file=sys.stderr)
+            if exc.transient:
+                print(
+                    f"\nRetried for {STARTUP_GRACE_S}s before giving up, so this "
+                    "is not a slow start.",
+                    file=sys.stderr,
+                )
+            print("=" * 72 + "\n", file=sys.stderr)
+            raise SystemExit(1) from exc
+
+    log.info("preflight_ok", database=True, redis=require_redis, attempts=attempt)
 
 
 def main() -> None:

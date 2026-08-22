@@ -206,6 +206,11 @@ running yet.
 
 Re-running it is safe and never deletes data.
 
+Every process waits up to 60 seconds for the database and Redis to become
+reachable before giving up, so a slow VPS is not mistaken for a broken one. A
+rejected password or a missing schema still fails immediately — waiting cannot
+fix those, and the real message should not be delayed by a minute.
+
 ---
 
 ## Step 7 — The database
@@ -372,7 +377,7 @@ docker compose logs worker | head -20
 
 | Message | What to do |
 |---|---|
-| `The database host 'postgres' is the correct name, but it does not resolve` | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
+| `The database host 'postgres' is the correct name, but it does not resolve` **after retrying for 60s** | The name is right, so nothing to edit — the container is not running. `docker compose ps`, then `docker compose logs postgres`. Usually caused by starting with only one compose file: the prod file alone does not define postgres at all. `./deploy.sh` handles the ordering for you |
 | `Cannot resolve the database host 'db'` | `DATABASE_URL` is set in `.env` and points at a host that does not exist inside the Docker network. **Delete the line** — Compose sets it for every service. Verify with `docker compose config \| grep DATABASE_URL` |
 | `Postgres rejected the password` | `POSTGRES_PASSWORD` was changed *after* the volume was created. Postgres only applies it when initialising a new data directory. Restore the old password, or `docker compose down -v` to start fresh — **that deletes all data** |
 | `The database is reachable but has no tables yet` | Run `docker compose exec api alembic upgrade head` |

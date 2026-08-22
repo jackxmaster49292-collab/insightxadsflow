@@ -132,3 +132,97 @@ def test_a_malformed_dsn_does_not_crash_the_explainer():
 def test_preflight_error_is_its_own_type():
     with pytest.raises(PreflightError):
         raise PreflightError("boom")
+
+
+# --------------------------------------------------------------------------- #
+# Retry policy
+# --------------------------------------------------------------------------- #
+def test_dns_and_refusal_are_retryable():
+    """A container that is still starting, or a name Docker has not published
+    yet, heals on its own. Failing on the first attempt turned a normal startup
+    race into a deployment failure."""
+    from app.preflight import _is_transient
+
+    assert _is_transient(socket.gaierror(-2, "Name or service not known"))
+    assert _is_transient(ConnectionRefusedErrorLike())
+
+
+def test_credentials_and_missing_database_are_not_retryable():
+    """Waiting cannot fix these, and retrying only delays the real message by a
+    minute."""
+    from app.preflight import _is_transient
+
+    assert not _is_transient(InvalidPasswordError("password authentication failed"))
+    assert not _is_transient(Exception('database "insight" does not exist'))
+
+
+def test_an_unknown_error_is_not_retried():
+    """Default to showing the operator something rather than stalling."""
+    from app.preflight import _is_transient
+
+    assert not _is_transient(RuntimeError("something novel"))
+
+
+def test_transient_flag_reaches_the_error():
+    from app.preflight import PreflightError
+
+    assert PreflightError("x", transient=True).transient
+    assert not PreflightError("x").transient
+
+
+async def test_run_retries_a_transient_failure_then_succeeds(monkeypatch):
+    """The reported production failure: postgres was up, but a brand-new Docker
+    network had not published the name yet."""
+    import app.preflight as pf
+
+    attempts = {"n": 0}
+
+    async def flaky() -> None:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise pf.PreflightError("not yet", transient=True)
+
+    async def noop() -> None:
+        return None
+
+    monkeypatch.setattr(pf, "check_database", flaky)
+    monkeypatch.setattr(pf, "check_redis", noop)
+    monkeypatch.setattr(pf, "RETRY_INTERVAL_S", 0)
+
+    await pf.run(require_schema=False)
+    assert attempts["n"] == 3
+
+
+async def test_run_does_not_retry_a_permanent_failure(monkeypatch):
+    import pytest as _pytest
+
+    import app.preflight as pf
+
+    attempts = {"n": 0}
+
+    async def always_bad() -> None:
+        attempts["n"] += 1
+        raise pf.PreflightError("bad password", transient=False)
+
+    monkeypatch.setattr(pf, "check_database", always_bad)
+    monkeypatch.setattr(pf, "RETRY_INTERVAL_S", 0)
+
+    with _pytest.raises(SystemExit):
+        await pf.run(require_schema=False, require_redis=False)
+    assert attempts["n"] == 1, "a permanent failure must not be retried"
+
+
+async def test_run_gives_up_after_the_grace_period(monkeypatch):
+    import pytest as _pytest
+
+    import app.preflight as pf
+
+    async def always_transient() -> None:
+        raise pf.PreflightError("still starting", transient=True)
+
+    monkeypatch.setattr(pf, "check_database", always_transient)
+    monkeypatch.setattr(pf, "RETRY_INTERVAL_S", 0)
+    monkeypatch.setattr(pf, "STARTUP_GRACE_S", 0)
+
+    with _pytest.raises(SystemExit):
+        await pf.run(require_schema=False, require_redis=False)
