@@ -48,6 +48,7 @@ from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
 from app.repositories import rules as rule_repo
 from app.services import safety
+from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
 
@@ -83,6 +84,13 @@ async def execute_job(
         return await _terminal(session, job, JobStatus.skipped, reasons.RULE_INACTIVE)
 
     # --- guards that must hold at delivery time, not just at intake ---------
+    # Checked here, not only when the job was queued: an account suspended
+    # mid-broadcast has work already sitting in the queue, and it must stop.
+    if not await user_service.is_active(session, rule.user_id):
+        return await _terminal(
+            session, job, JobStatus.skipped, reasons.ACCOUNT_SUSPENDED, rule_id=rule.id
+        )
+
     if connection.status is not ConnectionStatus.active:
         return await _terminal(
             session, job, JobStatus.skipped, reasons.CONNECTION_DISCONNECTED, rule_id=rule.id

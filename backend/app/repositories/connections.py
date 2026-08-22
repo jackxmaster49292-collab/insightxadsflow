@@ -145,8 +145,16 @@ async def delete_session_string(session: AsyncSession, *, connection: TelegramCo
 
 
 async def list_active_for_intake(session: AsyncSession) -> Sequence[TelegramConnection]:
-    """System-scoped: the listener needs every active connection."""
+    """System-scoped: the listener needs every active connection.
+
+    Connections belonging to a suspended account are excluded, so suspending
+    releases the Telethon client rather than leaving it connected and idle.
+    """
+    from app.db.models import User
+
     result = await session.execute(
-        select(TelegramConnection).where(TelegramConnection.status == ConnectionStatus.active)
+        select(TelegramConnection)
+        .join(User, User.id == TelegramConnection.user_id)
+        .where(TelegramConnection.status == ConnectionStatus.active, User.is_active.is_(True))
     )
     return result.scalars().all()

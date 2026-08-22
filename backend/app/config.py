@@ -57,9 +57,32 @@ class Settings(BaseSettings):
     #: forwarding bot: Telegram allows only one getUpdates consumer per token
     #: and a second one receives 409 Conflict.
     admin_bot_token: str | None = None
-    #: Only these Telegram user ids may use the panel. Empty means nobody —
-    #: failing closed, so a misconfigured deploy is locked rather than open.
+    #: Telegram user ids of the **operators** — the people who run this
+    #: deployment. They can see the user list and suspend an account. They
+    #: cannot read anyone's ads, rules or connections; suspension does not need
+    #: that and reading it would be a privacy breach.
+    #:
+    #: When access_mode is "closed" this doubles as the allowlist. Empty means
+    #: nobody, so a misconfigured deploy is locked rather than open.
     admin_telegram_ids: str = ""
+
+    #: Who may use the bot.
+    #:
+    #: "closed" — only the ids above. "open" — anyone who messages the bot gets
+    #: an account, after accepting the terms.
+    #:
+    #: Defaults to "closed" deliberately: an existing deployment pulling this
+    #: version must not silently become open to everyone who finds the bot.
+    #: Opening it is a decision, so it is an explicit line in .env.
+    access_mode: Literal["open", "closed"] = "closed"
+
+    #: How many Telegram connections one person may hold.
+    #:
+    #: An operational control, not a product limit: every MTProto connection is
+    #: a live Telethon client in the listener process, holding a socket and its
+    #: own update state. This bounds what one account can pin down, the same way
+    #: worker_concurrency bounds the worker.
+    max_connections_per_user: int = 3
 
     # --- Telegram -----------------------------------------------------------
     # "mock" is the default so an unconfigured process can never reach Telegram.
@@ -165,7 +188,17 @@ class Settings(BaseSettings):
         return frozenset(parsed)
 
     def is_admin(self, telegram_user_id: int) -> bool:
+        """Is this person an operator of this deployment?
+
+        Read from the environment on every call rather than stored on the user
+        row, so removing an id from ``ADMIN_TELEGRAM_IDS`` revokes it at the
+        next restart instead of leaving a stale flag in the database.
+        """
         return telegram_user_id in self.admin_ids
+
+    @property
+    def open_access(self) -> bool:
+        return self.access_mode == "open"
 
     def require_admin_bot_token(self) -> str:
         if not self.admin_bot_token:

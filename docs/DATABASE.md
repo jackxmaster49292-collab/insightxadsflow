@@ -18,8 +18,22 @@
 ## 2. Entities
 
 ### `users`
-`id` · `email` (CITEXT, **UNIQUE**) · `password_hash` (Argon2id) · `is_active` · `timezone`
-(default `UTC`) · `created_at` · `updated_at`
+`id` · `email` CITEXT UNIQUE · `is_active` · `suspended_at` NULL ·
+`suspended_reason` NULL · `timezone` · `telegram_user_id` BIGINT UNIQUE NULL ·
+`telegram_username` NULL · `terms_accepted_at` NULL · `broadcasts_sent` INT ·
+`password_hash` NULL · `created_at` · `updated_at`
+
+`is_active = false` is suspension; `suspended_at` and `suspended_reason` say
+when and why, so being cut off is not a silent mystery to the person it happened
+to. Every delivery path re-checks `is_active` immediately before sending, so
+suspending stops work that was already queued.
+
+`terms_accepted_at` NULL means the account has not accepted, and the panel shows
+it nothing but the terms screen until it does.
+
+`password_hash` is NULL for an account created through the bot, and the password
+login path requires a stored hash — so those accounts cannot be logged into with
+any password.
 
 ### `app_sessions`
 Server-side sessions so revocation is real, not advisory.

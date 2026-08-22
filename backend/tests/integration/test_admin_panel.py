@@ -1,10 +1,9 @@
-"""The Telegram control panel: the allowlist, the screens, and push alerts.
+"""The Telegram control panel: the access gate, the screens, and push alerts.
 
-The allowlist is the entire security model for this surface — anyone on Telegram
-can find and message a bot — so it gets adversarial coverage. It used to be
-enforced twice, once in a Mini App login endpoint and once in the bot
-middleware. The Mini App is gone, so the middleware is now the only gate and
-these tests exercise it directly.
+Anyone on Telegram can find and message a bot, so the middleware is the entire
+security model for this surface and gets adversarial coverage. It decides four
+things in order — allowed in, not throttled, not suspended, terms accepted —
+and each has its own failure, so each is tested separately.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from aiogram.types import User as TgUser
 from sqlalchemy import select
 
 from app.adminbot import views
-from app.adminbot.auth import AdminOnlyMiddleware
+from app.adminbot.auth import AccessMiddleware
 from app.config import get_settings
 from app.db.models import AdminNotification, BroadcastStatus, RuleStatus, User
 from app.repositories import admins as admin_repo
@@ -31,9 +30,15 @@ STRANGER_ID = 111_222_333
 
 @pytest.fixture(autouse=True)
 def admin_settings(monkeypatch):
+    """Closed mode: only the operator ids may use the bot.
+
+    Set explicitly rather than relied on as the default, so a future change to
+    the default cannot quietly turn these into tests of something else.
+    """
     settings = get_settings()
     monkeypatch.setattr(settings, "admin_bot_token", "555000111:AAEtoken", raising=False)
     monkeypatch.setattr(settings, "admin_telegram_ids", str(ADMIN_ID), raising=False)
+    monkeypatch.setattr(settings, "access_mode", "closed", raising=False)
     return settings
 
 
@@ -86,15 +91,32 @@ def a_callback() -> CapturingCallback:
     )
 
 
-async def run_middleware(event: object, telegram_id: int) -> dict:
+async def accept_terms_for(telegram_id: int) -> None:
+    """Mark this Telegram identity as having accepted, so a test about the
+    allowlist is not really a test about the terms gate."""
+    from app.db.session import session_scope
+    from app.repositories import admins as admin_repo
+    from app.services import users as user_service
+
+    async with session_scope() as session:
+        user = await admin_repo.upsert_user(
+            session, telegram_user_id=telegram_id, username="operator"
+        )
+        await user_service.accept_terms(session, user=user)
+
+
+async def run_middleware(event: object, telegram_id: int, *, accepted: bool = True) -> dict:
     """Push one update through the guard and report what the handler received."""
+    if accepted:
+        await accept_terms_for(telegram_id)
+
     seen: dict = {}
 
     async def handler(_event: object, data: dict) -> str:
         seen.update(data)
         return "handled"
 
-    result = await AdminOnlyMiddleware()(
+    result = await AccessMiddleware()(
         handler,
         event,  # type: ignore[arg-type]
         {"event_from_user": TgUser(id=telegram_id, is_bot=False, first_name="Op")},
@@ -299,6 +321,10 @@ def test_every_button_the_screens_emit_fits_the_limit():
 
     screens = [
         views.home(connections=[connection], rules=[], broadcasts=[broadcast], counts={}),
+        views.home(
+            connections=[connection], rules=[], broadcasts=[broadcast], counts={}, is_operator=True
+        ),
+        views.terms(),
         views.connections_list(connections=[connection]),
         views.connection_detail(connection=connection, chat_count=3),
         views.confirm_disconnect(connection=connection),

@@ -55,6 +55,10 @@ LIMITS: dict[str, RateLimit] = {
     "chat_sync": RateLimit(4, 60 * 60),
     "rule_create": RateLimit(30, 60 * 60),
     "control": RateLimit(60, 60),
+    # One person's updates to the bot. Generous on purpose: this exists to stop
+    # a stuck client or a script from occupying the panel, not to restrict
+    # ordinary use — tapping through screens produces a few updates a second.
+    "bot_update": RateLimit(60, 60),
     "default": RateLimit(600, 60),
 }
 

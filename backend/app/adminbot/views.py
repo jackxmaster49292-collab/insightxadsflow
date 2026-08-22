@@ -105,6 +105,55 @@ def _page_of(items: Sequence, page: int, size: int) -> tuple[Sequence, int, int]
 
 
 # --------------------------------------------------------------------------- #
+# Terms
+# --------------------------------------------------------------------------- #
+def terms() -> Screen:
+    """What a new account sees, and the only screen it sees until it accepts.
+
+    Written as a plain statement of what the tool does and where the
+    responsibility sits, not as legal cover. The honest points are the ones
+    people actually need: this posts from *your* Telegram account, Telegram can
+    restrict that account, and nothing here will help you get around it.
+    """
+    return Screen(
+        "\n".join(
+            [
+                "📡 *InsightAdFlow*",
+                "",
+                "Post your own message to Telegram groups you have already "
+                "joined, and answer people who message you first\\.",
+                "",
+                "*Before you start, the honest version:*",
+                "",
+                "• It posts from *your* Telegram account, to groups *you* have "
+                "already joined\\. It never joins a group for you and never reads "
+                "a member list\\.",
+                "",
+                "• *Telegram can restrict or ban your account* if people report "
+                "your messages as spam\\. That risk is yours, and this tool will "
+                "not help you get around it — it obeys every rate limit and wait "
+                "Telegram asks for\\.",
+                "",
+                "• Auto\\-reply only ever answers someone who messaged you "
+                "first\\. There is no way to message people who did not\\.",
+                "",
+                "• You are responsible for what you send\\. The operator of this "
+                "bot can suspend your access\\.",
+                "",
+                "• Your bot token, phone number and login code are typed into "
+                "this chat\\. Each message is deleted the moment it is read, but "
+                "Telegram's servers held it for a moment\\.",
+                "",
+                "Tap below if that is all fine\\.",
+            ]
+        ),
+        _rows(
+            [InlineKeyboardButton(text="✅ I understand, continue", callback_data="terms:accept")],
+        ),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Home
 # --------------------------------------------------------------------------- #
 def home(
@@ -113,6 +162,7 @@ def home(
     rules: Sequence[ForwardingRule],
     broadcasts: Sequence[Broadcast],
     counts: dict[str, int],
+    is_operator: bool = False,
 ) -> Screen:
     active_rules = [r for r in rules if r.status is RuleStatus.active]
     paused_rules = [r for r in rules if r.status is RuleStatus.paused]
@@ -162,8 +212,108 @@ def home(
                 InlineKeyboardButton(text="📊 Activity", callback_data="nav:activity"),
                 InlineKeyboardButton(text="🔄 Refresh", callback_data="nav:home"),
             ],
+            # Only operators see this, and only they can reach the handler —
+            # hiding the button is presentation, the middleware is the gate.
+            [InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0")]
+            if is_operator
+            else [],
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Users (operators only)
+# --------------------------------------------------------------------------- #
+def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:  # type: ignore[type-arg]
+    """Who is using this deployment. Counts only — never anyone's content."""
+    window, page, pages = _page_of(users, page, PAGE_SIZE)
+    lines = [
+        "👥 *Users*",
+        "",
+        f"{totals.get('total', 0)} total · {totals.get('suspended', 0)} suspended",
+        "",
+    ]
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text=("🚫 " if not user.is_active else "") + _user_label(user),
+                callback_data=f"usr:{user.id}",
+            )
+        ]
+        for user in window
+    ]
+
+    return Screen(
+        "\n".join(lines),
+        InlineKeyboardMarkup(
+            inline_keyboard=[
+                *buttons,
+                _pager("nav:users:", page, pages),
+                _home_row(),
+            ]
+        ),
+    )
+
+
+def user_detail(*, user, activity: dict[str, int]) -> Screen:  # type: ignore[no-untyped-def]
+    """One account, as counts.
+
+    Deliberately shows nothing about *what* they send. Suspending does not need
+    it, and reading someone's ads would be a privacy breach the product does not
+    make.
+    """
+    lines = [
+        f"{'🚫' if not user.is_active else '✅'} *{escape(_user_label(user))}*",
+        "",
+        f"*Telegram id* — `{user.telegram_user_id}`",
+        f"*Joined* — {user.created_at.strftime('%d %b %Y')}",
+        f"*Status* — {'suspended' if not user.is_active else 'active'}",
+    ]
+    if not user.is_active and user.suspended_reason:
+        lines.append(f"*Reason* — {escape(user.suspended_reason)}")
+    if user.terms_accepted_at is None:
+        lines.append("*Terms* — not accepted yet")
+
+    lines += [
+        "",
+        f"*Accounts connected* — {activity.get('connections', 0)}",
+        f"*Ads created* — {activity.get('broadcasts', 0)}",
+        f"*Forwarding rules* — {activity.get('rules', 0)}",
+        "",
+        "_Counts only\\. What they send is not visible here\\._",
+    ]
+
+    action = (
+        InlineKeyboardButton(text="✅ Reinstate", callback_data=f"usr:{user.id}:allow")
+        if not user.is_active
+        else InlineKeyboardButton(text="🚫 Suspend", callback_data=f"usr:{user.id}:asksus")
+    )
+
+    return Screen(
+        "\n".join(lines),
+        _rows([action], _back("nav:users:0")),
+    )
+
+
+def confirm_suspend(*, user) -> Screen:  # type: ignore[no-untyped-def]
+    return Screen(
+        f"🚫 *Suspend {escape(_user_label(user))}?*\n\n"
+        "They lose access to the bot immediately\\. Their forwarding rules pause "
+        "and anything still queued is cancelled\\.\n\n"
+        "Messages already delivered stay where they are — suspending cannot "
+        "unsend anything\\.",
+        _rows(
+            [InlineKeyboardButton(text="Yes, suspend", callback_data=f"usr:{user.id}:sus")],
+            [InlineKeyboardButton(text="Cancel", callback_data=f"usr:{user.id}")],
+        ),
+    )
+
+
+def _user_label(user) -> str:  # type: ignore[no-untyped-def]
+    if user.telegram_username:
+        return f"@{user.telegram_username}"
+    return f"id {user.telegram_user_id}"
 
 
 # --------------------------------------------------------------------------- #

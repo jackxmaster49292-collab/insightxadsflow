@@ -158,8 +158,22 @@ connection auto-pauses, rather than waiting for you to look.
 
 ```bash
 ADMIN_BOT_TOKEN=123456789:AA...   # a SEPARATE bot from any forwarding bot
-ADMIN_TELEGRAM_IDS=123456789      # empty means nobody — fails closed
+ADMIN_TELEGRAM_IDS=123456789      # the operators; empty means nobody
+ACCESS_MODE=closed                # or "open" — see below
 ```
+
+**Who can use it.** `closed` (the default) means only the operator ids. `open`
+means anyone who messages the bot, after accepting a terms screen that states
+plainly what the tool does and that Telegram can restrict *their* account if
+their messages are reported. Operators get a **Users** screen — counts and a
+suspend button, never anyone's content.
+
+Before opening it up, know this: every connected Telegram account reaches
+Telegram **from your server's single IP**, and Telegram correlates that. A
+handful of people is unremarkable; dozens of strangers broadcasting from one
+datacentre address is a pattern Telegram acts on. There is no fix for that which
+is not evasion, so the mitigation is operational — keep the group small enough
+to know, and suspend accounts that misuse it.
 
 Credentials — bot tokens, phone numbers, login codes, 2FA passwords — are typed
 into the chat, because that is where the panel is. Every prompt says so first,

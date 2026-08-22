@@ -38,6 +38,30 @@ class ConnectionNotReady(Exception):
     pass
 
 
+class TooManyConnections(Exception):
+    """The per-account connection ceiling was reached.
+
+    Operational, not a product limit: every MTProto connection is a live
+    Telethon client in the listener process holding a socket and its own update
+    state, so this bounds what one account can pin down.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"limit is {limit}")
+        self.limit = limit
+        self.message = (
+            f"You already have {limit} connections, which is the maximum. "
+            "Disconnect one you are not using first."
+        )
+
+
+async def _enforce_connection_cap(session: AsyncSession, *, user_id: uuid.UUID) -> None:
+    limit = get_settings().max_connections_per_user
+    existing = await connection_repo.list_for_user(session, user_id=user_id)
+    if len([c for c in existing if c.status is not ConnectionStatus.disconnected]) >= limit:
+        raise TooManyConnections(limit)
+
+
 @dataclass(frozen=True, slots=True)
 class PendingLogin:
     """Short-lived MTProto login state.
@@ -95,6 +119,7 @@ async def create_bot_connection(
 ) -> TelegramConnection:
     if await connection_repo.has_in_progress_attempt(session, user_id=user_id):
         raise DuplicateConnectionAttempt
+    await _enforce_connection_cap(session, user_id=user_id)
 
     connection = await connection_repo.create(
         session,
@@ -129,6 +154,7 @@ async def start_user_connection(
 ) -> TelegramConnection:
     if await connection_repo.has_in_progress_attempt(session, user_id=user_id):
         raise DuplicateConnectionAttempt
+    await _enforce_connection_cap(session, user_id=user_id)
 
     # Only a live provider needs real API credentials; the mock never contacts
     # Telegram, so requiring them would make the product untestable.

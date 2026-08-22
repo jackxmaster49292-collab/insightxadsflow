@@ -57,6 +57,14 @@ for required in ADMIN_BOT_TOKEN ADMIN_TELEGRAM_IDS; do
 done
 ok "control panel is configured"
 
+# ACCESS_MODE decides whether strangers can drive this bot. Easy to leave on
+# after testing, and the consequence is not visible until someone finds it.
+if grep -qE '^\s*ACCESS_MODE=open' .env; then
+  warn "ACCESS_MODE=open — anyone who messages this bot gets an account"
+  warn "they accept the terms first, and you can suspend them from Users,"
+  warn "but every connected account reaches Telegram from THIS server's IP."
+fi
+
 "${COMPOSE[@]}" config -q || die "compose files are invalid (see the error above)"
 ok "compose configuration is valid"
 

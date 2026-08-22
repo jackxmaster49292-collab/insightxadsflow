@@ -50,9 +50,11 @@ from app.repositories import connections as connection_repo
 from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
 from app.repositories import rules as rule_repo
+from app.repositories import users as user_repo
 from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
 from app.services import rules as rule_service
+from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
 router = Router(name="adminbot")
@@ -111,21 +113,42 @@ async def _send(message: Message, screen: views.Screen) -> None:
     await message.answer(screen.text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
 
 
-async def _home_screen(user_id: uuid.UUID) -> views.Screen:
+async def _home_screen(user_id: uuid.UUID, *, is_operator: bool = False) -> views.Screen:
     async with session_scope() as session:
         connections = await connection_repo.list_for_user(session, user_id=user_id)
         rules = await rule_repo.list_for_user(session, user_id=user_id)
         broadcasts = await broadcast_repo.list_for_user(session, user_id=user_id)
         counts = await event_repo.summary(session, user_id=user_id, period_hours=24)
-    return views.home(connections=connections, rules=rules, broadcasts=broadcasts, counts=counts)
+    return views.home(
+        connections=connections,
+        rules=rules,
+        broadcasts=broadcasts,
+        counts=counts,
+        is_operator=is_operator,
+    )
 
 
-async def _go_home(target: Message | CallbackQuery, user_id: uuid.UUID) -> None:
-    screen = await _home_screen(user_id)
+async def _go_home(
+    target: Message | CallbackQuery, user_id: uuid.UUID, *, is_operator: bool = False
+) -> None:
+    screen = await _home_screen(user_id, is_operator=is_operator)
     if isinstance(target, Message):
         await _send(target, screen)
     else:
         await _render(target, screen)
+
+
+async def _require_operator(query: CallbackQuery, is_operator: bool) -> bool:
+    """Second gate on operator-only screens.
+
+    The button is hidden for everyone else, but hiding a control is
+    presentation, not authorization — a callback can be replayed by anyone who
+    has seen it.
+    """
+    if is_operator:
+        return True
+    await query.answer("That is not available on your account.", show_alert=True)
+    return False
 
 
 async def _active_connection(session, user_id: uuid.UUID):  # type: ignore[no-untyped-def]
@@ -153,23 +176,61 @@ def _describe(exc: BaseException) -> str:
 # Commands
 # --------------------------------------------------------------------------- #
 @router.message(CommandStart())
-async def start(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
+async def start(
+    message: Message,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
+) -> None:
     await state.clear()
-    await _go_home(message, user_id)
+    await _go_home(message, user_id, is_operator=is_operator)
 
 
 @router.message(Command("panel", "home", "status"))
-async def panel(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
+async def panel(
+    message: Message,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
+) -> None:
     await state.clear()
-    await _go_home(message, user_id)
+    await _go_home(message, user_id, is_operator=is_operator)
+
+
+@router.callback_query(F.data == "terms:accept")
+async def accept_terms(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    async with session_scope() as session:
+        user = await user_repo.get_by_id(session, user_id)
+        if user is None:
+            await query.answer("Send /start to begin.", show_alert=True)
+            return
+        await user_service.accept_terms(session, user=user)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="user.accept_terms",
+            object_type="user",
+            object_id=str(user_id),
+        )
+
+    await _render(query, await _home_screen(user_id, is_operator=is_operator))
+    await query.answer("Welcome.")
 
 
 @router.message(Command("cancel"))
 async def cancel_flow(
-    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+    message: Message,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
 ) -> None:
     await state.clear()
-    await _go_home(message, user_id)
+    await _go_home(message, user_id, is_operator=is_operator)
 
 
 @router.message(Command("ads"))
@@ -213,10 +274,14 @@ async def noop(query: CallbackQuery, **_extra: Any) -> None:
 
 @router.callback_query(F.data == "nav:home")
 async def nav_home(
-    query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+    query: CallbackQuery,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
 ) -> None:
     await state.clear()
-    await _render(query, await _home_screen(user_id))
+    await _render(query, await _home_screen(user_id, is_operator=is_operator))
     await query.answer()
 
 
@@ -338,6 +403,10 @@ async def connect_bot_token(
             )
             await _go_home(message, user_id)
             return
+        except connection_service.TooManyConnections as exc:
+            await _ask(message, views.escape(exc.message))
+            await _go_home(message, user_id)
+            return
 
         try:
             await connection_service.verify_bot_connection(session, connection=connection)
@@ -421,6 +490,11 @@ async def account_phone(
                 message,
                 "Another connection attempt is already in progress\\. Finish or cancel it first\\.",
             )
+            await _go_home(message, user_id)
+            return
+        except connection_service.TooManyConnections as exc:
+            await state.clear()
+            await _ask(message, views.escape(exc.message))
             await _go_home(message, user_id)
             return
         except RuntimeError as exc:
@@ -1494,6 +1568,75 @@ async def rule_actions(
 
     await _render(query, screen)
     await query.answer(notice or "")
+
+
+# --------------------------------------------------------------------------- #
+# Users (operators only)
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data.startswith("nav:users"))
+async def nav_users(query: CallbackQuery, is_operator: bool = False, **_extra: Any) -> None:
+    if not await _require_operator(query, is_operator):
+        return
+    await _render(query, await _users_screen(page=_page_from(query.data or "")))
+    await query.answer()
+
+
+async def _users_screen(*, page: int) -> views.Screen:
+    async with session_scope() as session:
+        users = await user_repo.list_all(session)
+        totals = await user_repo.counts(session)
+    return views.users_list(users=users, page=page, totals=totals)
+
+
+@router.callback_query(F.data.startswith("usr:"))
+async def user_actions(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    if not await _require_operator(query, is_operator):
+        return
+
+    _kind, ident, action = views.parse_callback(query.data or "")
+    target_id = views.as_uuid(ident)
+    if target_id is None:
+        await query.answer("Unknown account.", show_alert=True)
+        return
+
+    notice = ""
+    async with session_scope() as session:
+        target = await user_repo.get_by_id(session, target_id)
+        if target is None:
+            await query.answer("That account no longer exists.", show_alert=True)
+            return
+
+        if action == "asksus":
+            if target.id == user_id:
+                await query.answer("You cannot suspend yourself.", show_alert=True)
+                return
+            await _render(query, views.confirm_suspend(user=target))
+            await query.answer()
+            return
+
+        if action == "sus":
+            # Guarded again here, not only on the confirmation screen: the
+            # callback can be replayed directly.
+            if target.id == user_id:
+                await query.answer("You cannot suspend yourself.", show_alert=True)
+                return
+            stopped = await user_service.suspend(session, user=target, by=user_id)
+            notice = (
+                f"Suspended. {stopped['rules']} rule(s) paused, "
+                f"{stopped['targets']} queued delivery(ies) cancelled."
+            )
+
+        elif action == "allow":
+            await user_service.reinstate(session, user=target, by=user_id)
+            notice = "Reinstated. Their rules and ads stay paused until they restart them."
+
+        activity = await user_repo.activity_for(session, user_id=target.id)
+        screen = views.user_detail(user=target, activity=activity)
+
+    await _render(query, screen)
+    await query.answer(notice)
 
 
 @router.callback_query()

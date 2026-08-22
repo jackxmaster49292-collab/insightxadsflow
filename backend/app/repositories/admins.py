@@ -1,4 +1,4 @@
-"""Telegram-identified admin accounts and the notification outbox."""
+"""Telegram-identified accounts and the notification outbox."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ async def get_by_telegram_id(session: AsyncSession, telegram_user_id: int) -> Us
     return result.scalar_one_or_none()
 
 
-async def upsert_admin(
+async def upsert_user(
     session: AsyncSession,
     *,
     telegram_user_id: int,
@@ -26,8 +26,10 @@ async def upsert_admin(
 ) -> User:
     """Find or create the account behind a Telegram identity.
 
-    Only ever called after the caller has been checked against the allowlist —
-    this function does not authorize anything on its own.
+    Called only after the middleware has decided the caller may be here. This
+    function authorizes nothing on its own — creating a row is not permission,
+    which is why a new account starts with no accepted terms and can see only
+    the terms screen.
     """
     user = await get_by_telegram_id(session, telegram_user_id)
     if user is not None:
@@ -36,8 +38,8 @@ async def upsert_admin(
         return user
 
     user = User(
-        # Synthetic and non-routable: a Telegram admin has no email, and a real
-        # address here would imply a login path that does not exist.
+        # Synthetic and non-routable: a Telegram account has no email here, and
+        # a real address would imply a login path that does not exist.
         email=f"tg-{telegram_user_id}@telegram.local",
         telegram_user_id=telegram_user_id,
         telegram_username=username,

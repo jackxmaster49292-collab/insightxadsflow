@@ -38,12 +38,14 @@ from app.db.models import (
     JobStatus,
     TelegramChat,
     TelegramConnection,
+    User,
 )
 from app.domain import reasons
 from app.repositories import broadcasts as broadcast_repo
 from app.repositories import chats as chat_repo
 from app.repositories import events as event_repo
 from app.services import safety
+from app.services import users as user_service
 from app.services.delivery import DeliveryOutcome, backoff_seconds
 
 log = structlog.get_logger(__name__)
@@ -114,6 +116,12 @@ async def queue(
     broadcast.completed_at = None
     broadcast.paused_reason_code = None
     queued = await broadcast_repo.schedule_targets(session, broadcast=broadcast, start_at=start_at)
+
+    # The one counter an operator can use to spot an account behaving unlike the
+    # others, without reading anything it sends.
+    owner = await session.get(User, broadcast.user_id)
+    if owner is not None:
+        owner.broadcasts_sent += 1
     log.info(
         "broadcast_queued",
         broadcast_id=str(broadcast.id),
@@ -188,6 +196,17 @@ async def execute_target(
         return await _terminal(session, target, JobStatus.skipped, reasons.BROADCAST_INACTIVE)
 
     # --- guards that must hold at delivery time, not just at queue time -----
+    # An account suspended mid-broadcast has targets already queued; they must
+    # stop, which is why this is checked here and not only at queue time.
+    if not await user_service.is_active(session, broadcast.user_id):
+        return await _terminal(
+            session,
+            target,
+            JobStatus.skipped,
+            reasons.ACCOUNT_SUSPENDED,
+            broadcast_id=broadcast.id,
+        )
+
     if connection.status is not ConnectionStatus.active:
         return await _terminal(
             session,

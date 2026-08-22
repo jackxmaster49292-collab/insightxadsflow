@@ -23,7 +23,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 
 from app import preflight
 from app.adminbot import notifier
-from app.adminbot.auth import AdminOnlyMiddleware
+from app.adminbot.auth import AccessMiddleware
 from app.adminbot.handlers import router
 from app.config import get_settings
 from app.db.session import dispose_engine
@@ -52,7 +52,7 @@ def build_dispatcher() -> Dispatcher:
 
     # Registered on both observers: a callback_query does not pass through the
     # message middleware, and missing it would leave every button unguarded.
-    guard = AdminOnlyMiddleware()
+    guard = AccessMiddleware()
     dispatcher.message.middleware(guard)
     dispatcher.callback_query.middleware(guard)
 
@@ -70,9 +70,12 @@ async def run() -> None:
 
     if not settings.admin_ids:
         raise SystemExit(
-            "ADMIN_TELEGRAM_IDS is empty, so nobody could use the panel and "
-            "starting would only expose a bot that rejects everyone. Set it to "
-            "your numeric Telegram user id (ask @userinfobot) and restart."
+            "ADMIN_TELEGRAM_IDS is empty.\n\n"
+            "Those ids are the operators of this deployment — the people who can "
+            "see the user list and suspend an account. Without them nobody can "
+            "administer the bot, and in the default closed access mode nobody "
+            "could use it at all.\n\n"
+            "Set it to your numeric Telegram user id (ask @userinfobot) and restart."
         )
 
     bot = Bot(token=token, default=DefaultBotProperties())
@@ -92,9 +95,22 @@ async def run() -> None:
         log.info(
             "adminbot_starting",
             username=me.username,
-            admins=len(settings.admin_ids),
+            operators=len(settings.admin_ids),
+            access_mode=settings.access_mode,
             provider=settings.telegram_provider,
         )
+        if settings.open_access:
+            # Worth one loud line at startup: this is the setting that decides
+            # whether strangers can drive the bot, and it is easy to leave on by
+            # accident after testing.
+            log.warning(
+                "open_access_enabled",
+                detail=(
+                    "ACCESS_MODE=open — anyone who messages this bot gets an "
+                    "account after accepting the terms. Operators can suspend "
+                    "an account from the panel."
+                ),
+            )
 
         alerts = asyncio.create_task(notifier.run(bot, _stop))
         await build_dispatcher().start_polling(bot, allowed_updates=ALLOWED_UPDATES)

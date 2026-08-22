@@ -21,6 +21,7 @@ form — you talk to a bot on Telegram and it does everything.
 | **Accounts** | Connect a Telegram account by phone number, or a bot by token. |
 | **Groups** | The groups each connection has joined, and where it may post. |
 | **Activity** | What was sent, skipped or failed, and why. |
+| **Users** *(operators only)* | Who is using this deployment; suspend an account. |
 
 Commands: `/panel`, `/ads`, `/rules`, `/help`, `/cancel`.
 
@@ -45,8 +46,11 @@ ADMIN_BOT_TOKEN=...
 ADMIN_TELEGRAM_IDS=123456789
 ```
 
-`ADMIN_TELEGRAM_IDS` empty means **nobody** can use the panel. That is
-deliberate — a misconfigured deployment is locked rather than open.
+`ADMIN_TELEGRAM_IDS` are the **operators**. Empty means nobody, and the bot
+refuses to start — a misconfigured deployment is locked rather than open.
+
+By default only those ids can use the bot at all. To let other people in, see
+§6.
 
 ### 2.2 Connect an account
 
@@ -136,21 +140,85 @@ counts and a plain-language reason for anything paused.
 
 ---
 
-## 6. Security model
+## 6. Who can use it
 
-Anyone on Telegram can find and message a bot, so the allowlist is the entire
-security model for this surface.
+`ACCESS_MODE` in `.env` decides:
 
-* `AdminOnlyMiddleware` runs before **every** handler, registered on both the
+| Value | Who gets in |
+|---|---|
+| `closed` *(default)* | Only the Telegram ids in `ADMIN_TELEGRAM_IDS` |
+| `open` | Anyone who messages the bot, after accepting the terms |
+
+The default is `closed` on purpose: pulling a new version must never silently
+open an existing deployment to everyone who finds the bot.
+
+`ADMIN_TELEGRAM_IDS` means **operators** — the people who run this deployment.
+They can list accounts and suspend one. They **cannot** read anyone's ads,
+rules or connections; suspending does not need that, and reading it would be a
+privacy breach the product does not make (ADR-032).
+
+### Before opening it up
+
+Every connected Telegram account reaches Telegram **from this server's single
+IP**, and Telegram correlates that. A handful of people is unremarkable. Dozens
+of strangers all broadcasting from one datacentre address is a pattern Telegram
+acts on, and the accounts it acts against are theirs.
+
+There is no engineering fix for this that is not evasion — proxy rotation is
+explicitly out of scope — so the mitigation is operational: keep the population
+small enough that you know who is in it, and suspend accounts that misuse it.
+
+### The terms screen
+
+A new account sees one screen and nothing else until it accepts. It states
+plainly that the tool posts from *their* account, that Telegram can restrict
+that account if messages are reported, that this software will not help them
+get around it, and that credentials typed into the chat were on Telegram's
+servers for a moment.
+
+The gate is in the middleware, not in the handlers, for the same reason the
+access check is: a handler can forget, and forgetting once would let someone
+use the tool without ever seeing what they are responsible for.
+
+### Suspending an account
+
+**Users → (pick one) → Suspend.** It takes effect immediately and stops work
+already queued, not just new work:
+
+* their forwarding rules pause;
+* sending broadcasts pause and queued deliveries are cancelled;
+* their connections drop out of the listener, releasing the Telethon client;
+* every delivery path re-checks the owner before sending, so anything the
+  cascade missed still cannot go out.
+
+Reinstating lets them back in but **resumes nothing**. Their rules and ads stay
+paused until they restart them. Auto-resuming a broadcast someone was suspended
+over is the wrong default.
+
+Messages already delivered stay where they are. Suspending cannot unsend
+anything, and the confirmation screen says so.
+
+---
+
+## 7. Security model
+
+* `AccessMiddleware` runs before **every** handler, registered on both the
   message and the callback observers. A callback does not pass through message
   middleware, and missing that would leave every button unguarded.
-* Non-allowlisted senders get the same reply either way, and the attempt is
-  audited in its own transaction so the record survives the rejection.
-* Handlers use the same `user_id`-scoped repositories as the HTTP API, so one
-  admin cannot reach another's data even if the allowlist were bypassed.
-* Accounts created through the bot store `password_hash = NULL`, and the password
-  login path requires a stored hash, so they cannot be logged into with any
-  password.
+* It decides four things in order: allowed in, not flooding the bot, not
+  suspended, terms accepted. Each has its own failure and its own message.
+* Rejections give the same reply either way, and a denied attempt is audited in
+  its own transaction so the record survives the rejection that caused it.
+* Handlers use `user_id`-scoped repositories throughout, so one account cannot
+  reach another's data even if the gate were bypassed. With the bot open, that
+  isolation is load-bearing rather than theoretical, and has its own tests.
+* Operator-only screens re-check on the handler. Hiding a button is
+  presentation; a callback can be replayed by anyone who has seen it.
+* Accounts created through the bot store `password_hash = NULL`, and the
+  password login path requires a stored hash, so they cannot be logged into
+  with any password.
+* One person's updates to the bot are rate-limited (60/minute), so a stuck
+  client or a script cannot occupy the panel.
 
 **Telegram account compromise equals panel compromise.** There is no second
 factor on this surface. That is the honest statement of the tradeoff.
@@ -178,7 +246,7 @@ This is weaker than the HTTPS form it replaced. See ADR-024.
 
 ---
 
-## 7. Screen mechanics
+## 8. Screen mechanics
 
 * Screens are **edited in place** as you navigate, so the chat stays one panel
   rather than an endless scroll.
@@ -195,7 +263,7 @@ This is weaker than the HTTPS form it replaced. See ADR-024.
 
 ---
 
-## 8. Alerts
+## 9. Alerts
 
 The worker never calls the Bot API. When a rule or connection pauses itself, the
 worker writes a row to `admin_notifications` and the bot drains that outbox and

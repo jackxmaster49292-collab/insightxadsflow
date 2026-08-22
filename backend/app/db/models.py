@@ -168,13 +168,26 @@ class User(Base, TimestampMixin):
 
     id: Mapped[uuid.UUID] = uuid_pk()
     email: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
+    #: False means suspended. Every delivery path re-checks it, so suspending
+    #: takes effect on work already queued rather than only on new work.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Shown to the suspended person, so being cut off is not a silent mystery.
+    suspended_reason: Mapped[str | None] = mapped_column(String(200))
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
     #: Set when the account is reached through the Telegram control panel.
     #: Nullable so password accounts keep working unchanged.
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     telegram_username: Mapped[str | None] = mapped_column(String(64))
-    #: Nullable: a Telegram-only admin never sets a password.
+    #: When this person accepted the terms. NULL means they have not, and the
+    #: panel shows them nothing but the terms screen until they do.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Bumped on every broadcast queued. The one number an operator needs to
+    #: spot an account behaving unlike the others, without reading its content.
+    broadcasts_sent: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    #: Nullable: a Telegram-only account never sets a password.
     password_hash: Mapped[str | None] = mapped_column(Text)
 
 

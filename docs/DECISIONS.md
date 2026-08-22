@@ -280,6 +280,78 @@ groups exist. The ordering becomes load-bearing: the list a keyboard was built
 from is the list its callbacks resolve against, and an out-of-range index is
 ignored rather than raising.
 
+### ADR-029 — The allowlist becomes an operator list; access is a deployment mode
+**Context.** ADR-021 made ``ADMIN_TELEGRAM_IDS`` both the identity and the
+authorization model: those ids were the only people who could use the bot at
+all. The operator then wanted ordinary people to use it too, which that design
+has no room for.
+**Decision.** Supersedes the authorization half of ADR-021. ``ACCESS_MODE``
+decides who may use the bot — ``closed`` (the operator ids only) or ``open``
+(anyone). ``ADMIN_TELEGRAM_IDS`` keeps its identity role and now means
+*operator*: someone who can list accounts and suspend one. Default is
+``closed``, so pulling this version cannot silently open an existing
+deployment; opening it is an explicit line in ``.env``.
+**Consequence.** Multi-tenancy was already structural — every repository is
+``user_id``-scoped — so the change is in the gate, not the data model. What is
+genuinely new is that data isolation is now load-bearing rather than
+theoretical, which is why the bot surface gets its own isolation tests.
+
+### ADR-030 — Nobody uses the tool before reading what it does
+**Context.** With open access, most people arrive knowing nothing about the
+tool. The two facts that matter to them are not obvious: it posts from *their*
+Telegram account, and Telegram can restrict that account if the messages are
+reported.
+**Decision.** A new account sees one screen and nothing else until it accepts.
+The gate lives in the middleware, not in handlers, for the same reason the
+access check does — a handler can forget. The accept callback is the single
+exemption. The text is a plain statement of what happens and where the
+responsibility sits, not legal cover: it says the account risk is theirs, that
+this software will not help them evade Telegram, that auto-reply cannot message
+anyone who did not write first, and that credentials typed into the chat were on
+Telegram's servers for a moment.
+**Consequence.** One extra tap before first use, and a defensible record that
+every account was told. It also puts the product's actual boundaries in front of
+the person most likely to test them.
+
+### ADR-031 — Suspension stops queued work, and reinstatement resumes nothing
+**Context.** An operator decides to stop an account while it has rules running
+and a broadcast halfway through two hundred groups. Setting a flag would leave
+all of that going.
+**Decision.** Suspending pauses their rules, pauses sending broadcasts, cancels
+queued jobs and targets, and drops their connections out of the listener's
+intake query so the Telethon client is released. Every delivery path
+additionally re-checks the owner immediately before sending, so a row the
+cascade somehow missed still cannot go out. Reinstating deliberately resumes
+nothing — the person restarts what they want, and can see what is paused and
+why.
+**Consequence.** Suspension is a real stop rather than a flag, and the extra
+per-delivery check is one indexed primary-key lookup. Auto-resuming a broadcast
+someone was suspended over is the wrong default, so it is not offered.
+
+### ADR-032 — An operator sees counts, never content
+**Context.** Moderating an open deployment needs enough signal to spot an
+account behaving unlike the others. The tempting version shows the operator
+everything.
+**Decision.** The user screens show connection, rule and broadcast counts, join
+date, terms status and suspension state. They do not show ad text, group lists,
+rule configuration or any message. Suspension does not require any of it.
+**Consequence.** An operator cannot investigate a specific complaint from inside
+the panel, which is the deliberate trade: reading everyone's messages to handle
+the rare report is a worse default than not being able to.
+
+### ADR-033 — Per-account connection ceiling, and a throttle on the bot itself
+**Context.** Open access removes the assumption that the only user is
+trustworthy. Two resources have no natural bound: MTProto connections, each a
+live Telethon client holding a socket and update state in the listener, and
+updates to the bot itself.
+**Decision.** ``MAX_CONNECTIONS_PER_USER`` (default 3) and a per-person
+rate-limit bucket on bot updates (60/minute), reusing the existing Redis
+limiter.
+**Consequence.** Both are operational controls in the same category as
+``worker_concurrency`` — they bound what one account can pin down. Neither is a
+product or monetization limit, and the guard test that bans plan/quota/tier
+vocabulary still passes.
+
 ---
 
 ## Open tradeoffs
@@ -302,3 +374,12 @@ ignored rather than raising.
    with its own reply.
 8. **Broadcast media in Postgres.** ADR-027. Fine for one image per ad; a video or a document library
    would need the object storage ADR-013 deferred.
+9. **One IP for every account.** Every MTProto connection reaches Telegram from the deployment's
+   single address, and Telegram correlates that. A handful of people is unremarkable; dozens of
+   strangers broadcasting from one datacentre IP is a pattern Telegram acts on. There is no
+   engineering fix that is not evasion — proxy rotation is explicitly out of scope — so the mitigation
+   is operational: keep the population small enough to know, and suspend accounts that misuse it.
+   ``ACCESS_MODE=open`` prints this warning at startup and in `deploy.sh`.
+10. **Moderation is reactive.** An operator learns about abuse from a report or from a broadcast count
+   that looks wrong, not from the system. Content-based detection would mean reading everyone's
+   messages, which ADR-032 rules out.

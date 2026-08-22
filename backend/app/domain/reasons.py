@@ -87,6 +87,9 @@ AUTO_REPLY_COOLDOWN: Final = "auto_reply_cooldown"
 AUTO_REPLY_DISABLED: Final = "auto_reply_disabled"
 AUTO_REPLY_NOT_PRIVATE: Final = "auto_reply_not_private"
 
+# --- account ----------------------------------------------------------------
+ACCOUNT_SUSPENDED: Final = "account_suspended"
+
 REASON_TEXT: dict[str, str] = {
     OK: "Available.",
     NOT_A_MEMBER: "The connection is not a member of this chat.",
@@ -154,6 +157,10 @@ REASON_TEXT: dict[str, str] = {
     AUTO_REPLY_NOT_PRIVATE: (
         "Not replied: automatic replies are only ever sent in a private chat "
         "started by the other person."
+    ),
+    ACCOUNT_SUSPENDED: (
+        "This account is suspended, so nothing is being sent. Messages already "
+        "delivered are unaffected."
     ),
     SLOWMODE_WAIT: (
         "This group has slow mode enabled, so Telegram limits how often anyone can "
