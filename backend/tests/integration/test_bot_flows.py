@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -34,8 +35,11 @@ from app.db.models import (
     ConnectionStatus,
     ControlTask,
     ControlTaskKind,
+    JobStatus,
+    RuleStatus,
     TelegramConnection,
 )
+from app.domain import reasons
 from tests.conftest import connect_bot, discovered, sync_with_chats
 
 ADMIN_CHAT = 900_100_200
@@ -50,31 +54,52 @@ MDV2_MUST_ESCAPE = set(r"[]()~>#+-=|{}.!")
 
 
 def assert_valid_markdown_v2(text: str) -> None:
-    """Reject the escaping mistakes Telegram rejects.
+    """Reject the two escaping mistakes Telegram rejects.
 
-    Not a full parser — it checks the rule that actually gets broken: a literal
-    ``.``, ``-``, ``(`` and friends must carry a backslash. ``*`` and ``_`` are
-    excluded because they legitimately open and close formatting, and ``` ` ```
-    because inline code spans are used for examples.
+    **Unescaped literals.** A literal ``.``, ``-``, ``(`` and friends must carry
+    a backslash.
+
+    **Unbalanced formatting.** ``_`` and ``*`` are excluded from the set above
+    because they legitimately open italics and bold — but an odd number of them
+    means one was never closed, and Telegram answers
+    ``Can't find end of Italic entity`` and drops the entire message. That is
+    how the Accounts screen broke on a status value of ``awaiting_code``: the
+    underscore inside it opened italics that never closed.
     """
     index = 0
     inside_code = False
+    opened = {"_": 0, "*": 0}
+
     while index < len(text):
         char = text[index]
         if char == "\\":
-            index += 2
+            index += 2  # escaped: literal, and not a delimiter
             continue
         if char == "`":
             inside_code = not inside_code
             index += 1
             continue
-        if not inside_code and char in MDV2_MUST_ESCAPE:
-            around = text[max(0, index - 40) : index + 40]
-            raise AssertionError(
-                f"unescaped {char!r} at {index} would make Telegram reject this "
-                f"message with a 400:\n...{around}..."
-            )
+        if not inside_code:
+            if char in MDV2_MUST_ESCAPE:
+                around = text[max(0, index - 40) : index + 40]
+                raise AssertionError(
+                    f"unescaped {char!r} at byte {len(text[:index].encode())} would "
+                    f"make Telegram reject this message with a 400:\n...{around}..."
+                )
+            if char in opened:
+                opened[char] += 1
         index += 1
+
+    assert not inside_code, "an unclosed code span would make Telegram reject this message"
+
+    for delimiter, count in opened.items():
+        if count % 2:
+            name = "Italic" if delimiter == "_" else "Bold"
+            raise AssertionError(
+                f"{count} unescaped {delimiter!r} — an odd number, so one entity is "
+                f'never closed. Telegram answers "Can\'t find end of {name} entity" '
+                f"and drops the whole message.\n\n{text}"
+            )
 
 
 def assert_keyboard_is_sendable(markup: InlineKeyboardMarkup | None) -> None:
@@ -770,3 +795,126 @@ def test_the_checker_agrees_with_telegram_s_documented_list():
     # `_`, `*` and backtick are excluded deliberately: they open formatting.
     assert documented - set("_*`") == MDV2_MUST_ESCAPE
     assert not re.search(r"[a-zA-Z0-9]", "".join(MDV2_MUST_ESCAPE))
+
+
+# --------------------------------------------------------------------------- #
+# Every status value, through every screen
+# --------------------------------------------------------------------------- #
+def a_connection(status: str, kind: str = "user"):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Master",
+        kind=SimpleNamespace(value=kind),
+        status=SimpleNamespace(value=status),
+        telegram_username="someone",
+        last_error_message_safe=None,
+    )
+
+
+def a_broadcast(status):
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Ad",
+        status=status,
+        body_text="hello",
+        media_kind=SimpleNamespace(value="none"),
+        delay_ms=3000,
+        paused_reason_code=None,
+    )
+
+
+def a_rule(status):
+    return SimpleNamespace(
+        id=uuid.uuid4(), name="Rule", status=status, delay_ms=0, paused_reason_code=None
+    )
+
+
+@pytest.mark.parametrize("status", [s.value for s in ConnectionStatus])
+def test_every_connection_status_renders(status):
+    """`awaiting_code`, `awaiting_2fa` and `paused_safety` all contain an
+    underscore. Unescaped, that opens italics MarkdownV2 never closes, and
+    Telegram drops the whole screen — which is exactly how Accounts broke."""
+    connection = a_connection(status)
+
+    for screen in (
+        views.connections_list(connections=[connection]),
+        views.connection_detail(connection=connection, chat_count=0),
+        views.confirm_disconnect(connection=connection),
+        views.home(connections=[connection], rules=[], broadcasts=[], counts={}),
+    ):
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
+
+
+@pytest.mark.parametrize("status", list(JobStatus))
+def test_every_delivery_status_renders(status):
+    """`needs_attention` and `dead_letter` reach the screen through the delivery
+    counts, which is a different code path from the status line."""
+    counts = {status.value: 3}
+
+    for screen in (
+        views.ad_detail(
+            broadcast=a_broadcast(BroadcastStatus.sending), counts=counts, target_count=3
+        ),
+        views.rule_detail(
+            rule=a_rule(RuleStatus.active),
+            source_titles=["Source"],
+            destination_count=3,
+            job_counts=counts,
+            preview="A preview sentence.",
+        ),
+    ):
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
+
+
+@pytest.mark.parametrize("status", list(BroadcastStatus))
+def test_every_broadcast_status_renders(status):
+    for screen in (
+        views.ad_detail(broadcast=a_broadcast(status), counts={}, target_count=1),
+        views.ads_list(broadcasts=[a_broadcast(status)], page=0, can_create=True),
+    ):
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
+
+
+@pytest.mark.parametrize("status", list(RuleStatus))
+def test_every_rule_status_renders(status):
+    for screen in (
+        views.rules_list(rules=[a_rule(status)], page=0, can_create=True),
+        views.rule_detail(
+            rule=a_rule(status),
+            source_titles=["Source"],
+            destination_count=1,
+            job_counts={},
+            preview="A preview sentence.",
+        ),
+    ):
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
+
+
+@pytest.mark.parametrize("code", sorted(reasons.REASON_TEXT))
+def test_every_reason_sentence_survives_being_rendered(code):
+    """Reason text is written by hand and lands inside italics on several
+    screens. One with a stray underscore would break the screen carrying it."""
+    connection = a_connection("error")
+    connection.last_error_message_safe = reasons.describe(code)
+
+    screen = views.connections_list(connections=[connection])
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_the_checker_catches_the_bug_that_broke_the_accounts_screen():
+    """A regression guard on the guard: the exact text Telegram rejected must
+    fail here, or this whole class of bug can come back unnoticed."""
+    broken = "\U0001f517 *Accounts*\n\n* *Master* — user, awaiting_code"
+
+    with pytest.raises(AssertionError, match="never closed"):
+        assert_valid_markdown_v2(broken)
+
+
+def test_the_checker_accepts_correctly_paired_formatting():
+    assert_valid_markdown_v2("*bold* and _italic_ together")
+    assert_valid_markdown_v2("an escaped \\_underscore\\_ is not a delimiter")
+    assert_valid_markdown_v2("`a_b` inside code is literal")

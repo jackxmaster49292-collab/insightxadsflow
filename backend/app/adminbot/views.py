@@ -182,7 +182,7 @@ def home(
         for connection in connections[:4]:
             lines.append(
                 f"  {icon(connection.status.value)} {escape(connection.label)} "
-                f"\\({connection.kind.value}\\)"
+                f"\\({escape(connection.kind.value)}\\)"
             )
         lines += [
             "",
@@ -337,7 +337,7 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
         for connection in connections:
             lines.append(
                 f"{icon(connection.status.value)} *{escape(connection.label)}* "
-                f"— {connection.kind.value}, {connection.status.value}"
+                f"— {escape(connection.kind.value)}, {escape(connection.status.value)}"
             )
             if connection.telegram_username:
                 lines.append(f"   @{escape(connection.telegram_username)}")
@@ -384,8 +384,8 @@ def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Scr
     lines = [
         f"{icon(connection.status.value)} *{escape(connection.label)}*",
         "",
-        f"*Type* — {connection.kind.value}",
-        f"*Status* — {connection.status.value}",
+        f"*Type* — {escape(connection.kind.value)}",
+        f"*Status* — {escape(connection.status.value)}",
         f"*Groups known* — {chat_count}",
     ]
     if connection.telegram_username:
@@ -590,7 +590,7 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
     lines = [
         f"{icon(broadcast.status.value)} *{escape(broadcast.name)}*",
         "",
-        f"*Status* — {broadcast.status.value}",
+        f"*Status* — {escape(broadcast.status.value)}",
     ]
     if broadcast.paused_reason_code:
         lines.append(f"*Reason* — {escape(reasons.describe(broadcast.paused_reason_code))}")
@@ -604,7 +604,8 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
     if counts:
         lines += [
             "",
-            "*Deliveries* — " + " · ".join(f"{icon(s)} {c} {s}" for s, c in sorted(counts.items())),
+            "*Deliveries* — "
+            + " · ".join(f"{icon(s)} {c} {escape(s)}" for s, c in sorted(counts.items())),
         ]
 
     controls: list[InlineKeyboardButton] = []
@@ -824,7 +825,7 @@ def rule_detail(
     lines = [
         f"{icon(rule.status.value)} *{escape(rule.name)}*",
         "",
-        f"*Status* — {rule.status.value}",
+        f"*Status* — {escape(rule.status.value)}",
     ]
     if rule.paused_reason_code:
         lines.append(f"*Reason* — {escape(reasons.describe(rule.paused_reason_code))}")
@@ -841,7 +842,7 @@ def rule_detail(
         lines += [
             "",
             "*Deliveries* — "
-            + " · ".join(f"{icon(s)} {c} {s}" for s, c in sorted(job_counts.items())),
+            + " · ".join(f"{icon(s)} {c} {escape(s)}" for s, c in sorted(job_counts.items())),
         ]
 
     controls: list[InlineKeyboardButton] = []
@@ -963,6 +964,12 @@ _MDV2_SPECIALS = r"_*[]()~`>#+-=|{}.!\\"
 
 def escape(text: str) -> str:
     """Escape for Telegram MarkdownV2.
+
+    Applies to **every** interpolated value, including ones that look safe.
+    Enum values are the trap: ``awaiting_code`` and ``needs_attention`` contain
+    an underscore, MarkdownV2 reads that as opening italics, and with no closing
+    underscore Telegram rejects the whole message — so the screen does not
+    render at all rather than rendering oddly.
 
     Chat titles are attacker-influenced — someone can name a group `*bold*` or
     worse — so anything interpolated into a screen goes through here. An
