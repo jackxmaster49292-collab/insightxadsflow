@@ -1,0 +1,37 @@
+# Automatic HTTPS for the control panel.
+#
+# Caddy obtains and renews a Let's Encrypt certificate on its own — no certbot,
+# no cron job, no manual renewal. Telegram only accepts an https:// origin for a
+# Mini App button, so this is what makes the full panel reachable from the bot.
+#
+# PANEL_DOMAIN comes from .env, e.g. panel.example.com
+
+{$PANEL_DOMAIN} {
+	encode zstd gzip
+
+	# API first: the SPA and the API share one origin so the session cookie's
+	# SameSite=Strict behaviour holds and no CORS is needed in production.
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

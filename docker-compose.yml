@@ -7,7 +7,7 @@ x-backend: &backend
   environment:
     # Overrides .env, which points at the host ports for running the backend
     # outside Docker. Inside the network, services resolve each other by name.
-    DATABASE_URL: postgresql+asyncpg://insight:insight@postgres:5432/insight
+    DATABASE_URL: postgresql+asyncpg://insight:${POSTGRES_PASSWORD:-insight}@postgres:5432/insight
     REDIS_URL: redis://redis:6379/0
   depends_on:
     postgres:
@@ -21,7 +21,7 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: insight
-      POSTGRES_PASSWORD: insight
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-insight}
       POSTGRES_DB: insight
     ports: ["5433:5432"]
     # Postgres 18+ expects a single mount at /var/lib/postgresql; the data lives

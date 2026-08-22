@@ -1,0 +1,53 @@
+# Production overlay. Use together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What it changes:
+#   * Caddy terminates TLS on 80/443 and gets a Let's Encrypt certificate
+#     automatically. Telegram requires https:// for the Mini App button.
+#   * Postgres and Redis stop publishing ports to the host. In the base file
+#     they are exposed for local development; on a public VPS that would put
+#     your database on the internet.
+#   * nginx no longer publishes 8080 — Caddy is the only way in.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:?set PANEL_DOMAIN in .env, e.g. panel.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      - frontend
+      - api
+
+  # Reachable only from inside the Docker network now.
+  frontend:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+
+  # Never expose a database to the internet.
+  # POSTGRES_PASSWORD is threaded into both the server and the app's DSN by the
+  # base file; this only makes it mandatory in production.
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong POSTGRES_PASSWORD in .env}
+
+  redis:
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

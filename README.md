@@ -163,6 +163,7 @@ MINIAPP_URL=https://panel.example.com    # Telegram requires https
 
 | Doc | Contents |
 |---|---|
+| [DEPLOY_VPS.md](docs/DEPLOY_VPS.md) | **Step-by-step VPS deployment** — hardening, Docker, database, HTTPS, backups |
 | [TELEGRAM_PANEL.md](docs/TELEGRAM_PANEL.md) | **Managing everything from inside Telegram** — bot, Mini App, setup, security |
 | [PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) | Scope, safety boundary, terminology, features, MVP definition |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Integration choice, library verification, components, intake, queue |
