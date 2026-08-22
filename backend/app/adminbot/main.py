@@ -21,6 +21,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.redis import RedisStorage
 
+from app import preflight
 from app.adminbot import notifier
 from app.adminbot.auth import AdminOnlyMiddleware
 from app.adminbot.handlers import router
@@ -62,6 +63,8 @@ def build_dispatcher() -> Dispatcher:
 async def run() -> None:
     settings = get_settings()
     configure_logging(json_output=settings.environment != "local")
+
+    await preflight.run()
 
     token = settings.require_admin_bot_token()
 

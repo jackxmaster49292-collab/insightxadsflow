@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy import delete, select
 
+from app import preflight
 from app.config import get_settings
 from app.db.models import (
     AppSession,
@@ -112,6 +113,7 @@ async def retention_loop() -> None:
 async def run() -> None:
     settings = get_settings()
     configure_logging(json_output=settings.environment != "local")
+    await preflight.run()
     log.info("scheduler_starting")
 
     tasks = [

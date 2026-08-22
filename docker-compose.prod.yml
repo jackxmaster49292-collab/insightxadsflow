@@ -19,7 +19,11 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      PANEL_DOMAIN: ${PANEL_DOMAIN:?set PANEL_DOMAIN in .env, e.g. panel.example.com}
+      # ":-" also covers PANEL_DOMAIN being present but empty, which is how
+      # .env.example ships it. Caddy's own {$VAR:default} only fires when the
+      # variable is unset, so an empty value would produce an unparseable
+      # site address.
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

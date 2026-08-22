@@ -1,12 +1,26 @@
-# Automatic HTTPS for the control panel.
+# Reverse proxy for the control panel.
 #
-# Caddy obtains and renews a Let's Encrypt certificate on its own — no certbot,
-# no cron job, no manual renewal. Telegram only accepts an https:// origin for a
-# Mini App button, so this is what makes the full panel reachable from the bot.
+# PANEL_DOMAIN decides whether this serves HTTPS or plain HTTP:
 #
-# PANEL_DOMAIN comes from .env, e.g. panel.example.com
+#   PANEL_DOMAIN=panel.example.com   → automatic HTTPS via Let's Encrypt.
+#                                      This is what the Mini App needs.
+#   PANEL_DOMAIN=http://203.0.113.10 → plain HTTP on an IP. Useful for a first
+#                                      smoke test before DNS exists. The Mini
+#                                      App will NOT work: Telegram only accepts
+#                                      an https:// origin for a web_app button.
+#   (unset)                          → falls back to :80, plain HTTP.
+#
+# Note the `http://` prefix in the IP case. Without a scheme Caddy tries to get
+# a publicly trusted certificate, which no CA will issue for a bare IP, and
+# startup fails. The prefix tells Caddy to skip TLS entirely.
 
-{$PANEL_DOMAIN} {
+{
+	# Silence the "no admin email" nag; set ACME_EMAIL in .env to get expiry
+	# warnings from Let's Encrypt.
+	email {$ACME_EMAIL:admin@localhost}
+}
+
+{$PANEL_DOMAIN::80} {
 	encode zstd gzip
 
 	# API first: the SPA and the API share one origin so the session cookie's
@@ -20,13 +34,17 @@
 	}
 
 	header {
-		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Server
 	}
+
+	# Only meaningful over HTTPS, and actively harmful if sent over plain HTTP —
+	# a browser would refuse to load the site over HTTP afterwards. Caddy strips
+	# it automatically for non-TLS sites.
+	header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
 
 	log {
 		output file /var/log/caddy/access.log {

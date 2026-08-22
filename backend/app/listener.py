@@ -20,6 +20,7 @@ import uuid
 
 import structlog
 
+from app import preflight
 from app.adapters.base import InboundMessage
 from app.config import get_settings
 from app.db.models import ConnectionKind, TelegramConnection
@@ -189,6 +190,7 @@ async def _consume(connection_id: uuid.UUID, queue: asyncio.Queue[InboundMessage
 async def run() -> None:
     settings = get_settings()
     configure_logging(json_output=settings.environment != "local")
+    await preflight.run()
     log.info("listener_starting", listener_id=LISTENER_ID)
 
     supervised: dict[uuid.UUID, asyncio.Task[None]] = {}

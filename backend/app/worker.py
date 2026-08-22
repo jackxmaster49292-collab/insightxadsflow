@@ -18,6 +18,7 @@ import uuid
 
 import structlog
 
+from app import preflight
 from app.config import get_settings
 from app.db.models import (
     ControlTask,
@@ -164,6 +165,7 @@ async def process_control_task(task: ControlTask) -> None:
 async def run() -> None:
     settings = get_settings()
     configure_logging(json_output=settings.environment != "local")
+    await preflight.run()
     log.info("worker_starting", worker_id=WORKER_ID, concurrency=settings.worker_concurrency)
 
     semaphore = asyncio.Semaphore(settings.worker_concurrency)

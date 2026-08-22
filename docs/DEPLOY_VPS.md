@@ -314,6 +314,20 @@ docker compose exec api alembic upgrade head
 
 ## If something is wrong
 
+**No domain yet, or testing on a bare IP**
+
+`PANEL_DOMAIN` controls what Caddy serves:
+
+| `.env` value | Result |
+|---|---|
+| `panel.example.com` | Automatic HTTPS. **Required for the Mini App** |
+| `http://203.0.113.10` | Plain HTTP on that IP. Good for a first smoke test. The `http://` prefix is mandatory — without it Caddy tries to get a certificate no CA will issue for an IP, and fails to start |
+| *(empty)* | Plain HTTP on port 80 |
+
+In the last two cases the bot works fully, but the **⚙️ Open full panel** button
+is hidden — Telegram only accepts an `https://` origin for a Mini App. Add a
+domain when you are ready to connect Telegram accounts and edit rules.
+
 **Certificate not issued / site not loading over HTTPS**
 
 ```bash
@@ -339,6 +353,26 @@ docker compose logs adminbot | tail -30
 
 You used the same bot token for the admin bot and a forwarding connection.
 Telegram allows only one `getUpdates` consumer per token. Create a second bot.
+
+**Worker / listener / scheduler keep restarting**
+
+Read the top of the log — they now print a diagnosis rather than a traceback:
+
+```bash
+docker compose logs worker | head -20
+```
+
+| Message | What to do |
+|---|---|
+| `Cannot resolve the database host 'db'` | `DATABASE_URL` is set in `.env` and points at a host that does not exist inside the Docker network. **Delete the line** — Compose sets it for every service. Verify with `docker compose config \| grep DATABASE_URL` |
+| `Postgres rejected the password` | `POSTGRES_PASSWORD` was changed *after* the volume was created. Postgres only applies it when initialising a new data directory. Restore the old password, or `docker compose down -v` to start fresh — **that deletes all data** |
+| `The database is reachable but has no tables yet` | Run `docker compose exec api alembic upgrade head` |
+| `Nothing is listening on the database host` | `docker compose ps` — the postgres container is not up |
+
+> The most common cause is a stale `DATABASE_URL` or `REDIS_URL` in `.env`. Both
+> are commented out in `.env.example` on purpose: Compose owns them, and setting
+> them there only takes effect when something runs *outside* Compose — at which
+> point it points somewhere wrong. If your `.env` has them, remove them.
 
 **Nothing is being forwarded**
 
