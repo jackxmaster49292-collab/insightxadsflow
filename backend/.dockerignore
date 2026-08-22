@@ -1,0 +1,30 @@
+# Docker does NOT read .gitignore. The backend Dockerfile copies `app/`
+# selectively rather than `.`, so this is defence in depth — but a local .venv
+# is 300+ MB of the wrong platform's binaries, and letting it near a build
+# context is asking for a confusing failure later.
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Local env and secrets must never enter an image layer.
+.env
+.env.*
+!.env.example
+
+# Telegram session material, if any ever lands on disk.
+*.session
+*.session-journal
+
+# Tooling caches and test output.
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+*.egg-info
+
+.git
+.gitignore
+.DS_Store
