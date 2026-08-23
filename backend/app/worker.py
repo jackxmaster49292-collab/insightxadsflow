@@ -199,7 +199,9 @@ async def process_control_task(task: ControlTask) -> None:
                     source_eligible=report.source_eligible,
                     destination_eligible=report.destination_eligible,
                     deactivated=report.deactivated,
+                    errors=report.errors,
                 )
+                await _report_sync_result(session, task=row, connection=connection, report=report)
             elif row.kind is ControlTaskKind.health_check:
                 await connection_service.run_health_check(session, connection=connection)
             elif row.kind is ControlTaskKind.check_chat_access:
@@ -240,6 +242,44 @@ CONTROL_TASK_LABELS = {
     ControlTaskKind.disconnect: "Disconnecting",
     ControlTaskKind.check_chat_access: "Re-checking a group",
 }
+
+
+async def _report_sync_result(session, *, task, connection, report) -> None:  # type: ignore[no-untyped-def]
+    """Tell the customer what the sync found, including when it found nothing.
+
+    Zero is the answer that most needs saying out loud: it is what a broken
+    sync and an empty account look like from the panel, and they need different
+    responses.
+    """
+    from app.repositories import admins as admin_repo
+
+    if report.discovered == 0:
+        body = (
+            "I read this account's chat list and it came back empty.\n\n"
+            "That usually means the account has not joined any groups yet, or "
+            "the sign-in is no longer valid. Try Check health on the connection."
+        )
+    else:
+        body = (
+            f"{report.discovered} chats read.\n\n"
+            f"• {report.destination_eligible} you can post in — these are what "
+            "an ad can be sent to\n"
+            f"• {report.source_eligible} you can read from — these can be a "
+            "forwarding source\n"
+        )
+        if report.errors:
+            body += f"\n{report.errors} could not be checked and were left unavailable."
+
+    await admin_repo.notify(
+        session,
+        user_id=task.user_id,
+        kind="sync_complete",
+        title=f"Groups synced — {connection.label}",
+        body=body,
+        # One alert per run of this task, so a retry cannot double up.
+        dedupe_key=f"sync_complete:{task.id}",
+        connection_id=connection.id,
+    )
 
 
 async def _report_control_failure(session, *, task: ControlTask, code: str) -> None:  # type: ignore[no-untyped-def]

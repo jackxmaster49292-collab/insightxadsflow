@@ -71,6 +71,65 @@ async def test_a_health_check_runs(client, actor, session):
     assert script_for(connection_id).calls_to("health_check")
 
 
+async def test_a_finished_sync_reports_what_it_found(client, actor, session):
+    """ "Sync queued" and then a screen that never changes is how a broken sync
+    looked. A finished one now says what it did."""
+    connection_id = await connect_bot(actor)
+    script_for(connection_id).chats = [
+        discovered(-1002000, "Group one", chat_kind="supergroup"),
+        discovered(-1002001, "Group two", chat_kind="supergroup"),
+    ]
+
+    task = await queue_task(actor, connection_id, ControlTaskKind.sync_chats)
+    await process_control_task(task)
+
+    alert = (await session.execute(select(AdminNotification))).scalar_one()
+    assert alert.kind == "sync_complete"
+    assert "2 chats read" in alert.body
+    assert "you can post in" in alert.body
+
+
+async def test_finding_nothing_is_said_out_loud(client, actor, session):
+    """Zero is the answer that most needs saying: an empty account and a broken
+    sign-in look identical from the panel, and they need different responses."""
+    connection_id = await connect_bot(actor)
+    script_for(connection_id).chats = []
+
+    task = await queue_task(actor, connection_id, ControlTaskKind.sync_chats)
+    await process_control_task(task)
+
+    alert = (await session.execute(select(AdminNotification))).scalar_one()
+    assert "came back empty" in alert.body
+    assert "Check health" in alert.body
+
+
+async def test_the_connection_screen_says_a_sync_is_running(client, actor, session):
+    """The difference between "nothing happened" and "wait a moment"."""
+    from app.adminbot import views
+    from app.db.models import ConnectionKind, ConnectionStatus
+    from app.repositories import connections as connection_repo
+
+    connection = await connection_repo.create(
+        session,
+        user_id=uuid.UUID(actor.id),
+        kind=ConnectionKind.user,
+        label="Jack",
+        status=ConnectionStatus.active,
+    )
+
+    idle = views.connection_detail(connection=connection, chat_count=0, syncing=False)
+    running = views.connection_detail(connection=connection, chat_count=0, syncing=True)
+
+    assert "No groups yet" in idle.text
+    assert "Reading your groups now" in running.text
+    assert "I will message you when it finishes" in running.text
+
+    idle_buttons = [b.text for row in idle.keyboard.inline_keyboard for b in row]
+    running_buttons = [b.text for row in running.keyboard.inline_keyboard for b in row]
+    assert any("Sync groups" in b for b in idle_buttons)
+    assert any("tap to refresh" in b for b in running_buttons)
+
+
 # --------------------------------------------------------------------------- #
 # A failure has to be visible
 # --------------------------------------------------------------------------- #

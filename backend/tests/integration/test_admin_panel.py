@@ -396,9 +396,18 @@ async def test_pausing_a_rule_queues_an_alert(client, session):
     await safety.pause_rule(session, rule_id=uuid.UUID(ctx["rule_id"]), reason_code="safety_pause")
     await session.commit()
 
-    rows = (await session.execute(select(AdminNotification))).scalars().all()
+    # Scoped by kind: a synced connection also queues its own alert now, and
+    # this test is about the pause.
+    rows = (
+        (
+            await session.execute(
+                select(AdminNotification).where(AdminNotification.kind == "rule_paused")
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
-    assert rows[0].kind == "rule_paused"
     assert "paused" in rows[0].body.lower()
     assert rows[0].sent_at is None
 
@@ -424,7 +433,15 @@ async def test_repeated_pauses_collapse_into_one_alert(client, session):
         )
     await session.commit()
 
-    rows = (await session.execute(select(AdminNotification))).scalars().all()
+    rows = (
+        (
+            await session.execute(
+                select(AdminNotification).where(AdminNotification.kind == "rule_paused")
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
 
 

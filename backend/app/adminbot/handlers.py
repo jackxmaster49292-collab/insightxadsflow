@@ -766,7 +766,15 @@ async def connection_actions(query: CallbackQuery, user_id: uuid.UUID, **_extra:
         chats = await chat_repo.list_filtered(
             session, user_id=user_id, connection_id=connection.id, limit=1000
         )
-        screen = views.connection_detail(connection=connection, chat_count=len(chats))
+        running = await job_repo.pending_control_for(
+            session,
+            user_id=user_id,
+            kind=ControlTaskKind.sync_chats,
+            connection_id=connection.id,
+        )
+        screen = views.connection_detail(
+            connection=connection, chat_count=len(chats), syncing=running is not None
+        )
 
     await _render(query, screen)
     await query.answer(notice)

@@ -378,7 +378,9 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
 UNFINISHED = ("pending", "awaiting_code", "awaiting_2fa")
 
 
-def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Screen:
+def connection_detail(
+    *, connection: TelegramConnection, chat_count: int, syncing: bool = False
+) -> Screen:
     lines = [
         f"{icon(connection.status.value)} *{escape(connection.label)}*",
         "",
@@ -390,7 +392,17 @@ def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Scr
         lines.append(f"*Telegram* — @{escape(connection.telegram_username)}")
     if connection.last_error_message_safe:
         lines += ["", f"⚠️ {escape(connection.last_error_message_safe)}"]
-    if chat_count == 0:
+    if syncing:
+        # A running sync is the difference between "nothing happened" and "wait
+        # a moment", and the screen is the only place that can say which.
+        lines += [
+            "",
+            "\u23f3 *Reading your groups now\\.\\.\\.*",
+            "",
+            "_This takes a few seconds\\. Tap Refresh to see the result, or wait "
+            "— I will message you when it finishes\\._",
+        ]
+    elif chat_count == 0:
         lines += [
             "",
             "_No groups yet\\. Tap Sync groups — it reads the groups this account "
@@ -420,7 +432,10 @@ def connection_detail(*, connection: TelegramConnection, chat_count: int) -> Scr
         _rows(
             [
                 InlineKeyboardButton(
-                    text="🔄 Sync groups", callback_data=f"conn:{connection.id}:sync"
+                    text="⏳ Syncing — tap to refresh" if syncing else "🔄 Sync groups",
+                    callback_data=f"conn:{connection.id}"
+                    if syncing
+                    else f"conn:{connection.id}:sync",
                 )
             ],
             [
