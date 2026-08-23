@@ -303,6 +303,10 @@ class BotAdapter:
         except TimeoutError as exc:
             raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
 
+    async def custom_emoji_ids(self, emoticon: str) -> list[str]:
+        # The Bot API has no emoji search. Saying so is better than guessing.
+        return []
+
     async def send_text(
         self,
         destination: ChatRef,

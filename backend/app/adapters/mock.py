@@ -51,6 +51,8 @@ class MockScript:
     premium: bool = False
     next_destination_message_id: int = 1000
     connect_error: BaseException | None = None
+    #: Custom-emoji search results, keyed by emoticon.
+    custom_emoji: dict[str, list[str]] = field(default_factory=dict)
     #: Errors keyed by method name, raised on the next call to that method.
     #: `delivery_errors` is keyed by destination, which discovery and health
     #: checks do not have — so a test could not script a failure in either.
@@ -121,6 +123,11 @@ class MockAdapter:
     async def check_source_access(self, ref: ChatRef) -> AccessReport:
         self.script.record("check_source_access", ref)
         return self.script.source_allowed.get(ref.key, AccessReport.ok())
+
+    async def custom_emoji_ids(self, emoticon: str) -> list[str]:
+        self.script.record("custom_emoji_ids", emoticon)
+        self._maybe_fail("custom_emoji_ids")
+        return list(self.script.custom_emoji.get(emoticon, []))
 
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
         self.script.record("check_destination_access", ref)

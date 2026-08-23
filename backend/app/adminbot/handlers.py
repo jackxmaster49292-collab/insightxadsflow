@@ -28,7 +28,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.adminbot import secrets, views
+from app.adminbot import premium_icons, secrets, views
 from app.adminbot.states import (
     ComposeAd,
     ComposeRule,
@@ -40,6 +40,7 @@ from app.config import get_settings
 from app.db.models import (
     BroadcastMedia,
     BroadcastStatus,
+    ConnectionKind,
     ConnectionStatus,
     ControlTaskKind,
     JobStatus,
@@ -51,6 +52,7 @@ from app.repositories import chats as chat_repo
 from app.repositories import connections as connection_repo
 from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
+from app.repositories import panel_emoji as panel_emoji_repo
 from app.repositories import rules as rule_repo
 from app.repositories import users as user_repo
 from app.services import broadcast as broadcast_service
@@ -76,6 +78,29 @@ PICK_HINT_RULE = "Tap to select. Only chats this account can post in are listed.
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
+async def _deliver(send, text: str) -> None:  # type: ignore[no-untyped-def]
+    """Send ``text``, upgraded to premium icons when a map is loaded.
+
+    The upgrade is best-effort by design: if Telegram rejects the message —
+    which it will for any bot without a Fragment username, that being
+    Telegram's rule for custom emoji — the premium icons are suspended and the
+    plain text goes out instead. A degraded icon is a shrug; a blank panel is
+    an outage.
+    """
+    styled = premium_icons.apply(text)
+    if styled == text:
+        await send(text)
+        return
+    try:
+        await send(styled)
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc):
+            raise
+        log.warning("premium_icons_rejected", error=str(exc))
+        premium_icons.suspend()
+        await send(text)
+
+
 async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None:
     """Edit the existing panel message instead of sending a new one.
 
@@ -89,33 +114,51 @@ async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None
         # of letting an old message break the button.
         if not isinstance(message, Message):
             if target.from_user and target.bot:
-                await target.bot.send_message(
-                    target.from_user.id,
-                    screen.text,
-                    reply_markup=screen.keyboard,
-                    parse_mode=PARSE_MODE,
-                )
+                bot, chat_id = target.bot, target.from_user.id
+
+                async def send_fresh(text: str) -> None:
+                    await bot.send_message(
+                        chat_id,
+                        text,
+                        reply_markup=screen.keyboard,
+                        parse_mode=PARSE_MODE,
+                    )
+
+                await _deliver(send_fresh, screen.text)
             return
+
+        async def send_edit(text: str) -> None:
+            await message.edit_text(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+
         try:
-            await message.edit_text(
-                screen.text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE
-            )
+            await _deliver(send_edit, screen.text)
         except TelegramBadRequest as exc:
             # Tapping Refresh twice produces an identical message; Telegram
             # rejects that edit and it is not an error worth surfacing.
             if "message is not modified" not in str(exc):
                 raise
     else:
-        await target.answer(screen.text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+
+        async def send_answer(text: str) -> None:
+            await target.answer(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+
+        await _deliver(send_answer, screen.text)
 
 
 async def _ask(message: Message, text: str) -> None:
     """Prompt for the next step of a flow, as a fresh message."""
-    await message.answer(text, parse_mode=PARSE_MODE)
+
+    async def send(styled: str) -> None:
+        await message.answer(styled, parse_mode=PARSE_MODE)
+
+    await _deliver(send, text)
 
 
 async def _send(message: Message, screen: views.Screen) -> None:
-    await message.answer(screen.text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+    async def send(text: str) -> None:
+        await message.answer(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+
+    await _deliver(send, screen.text)
 
 
 async def _home_screen(user_id: uuid.UUID, *, is_operator: bool = False) -> views.Screen:
@@ -1825,6 +1868,98 @@ async def rule_actions(
 
     await _render(query, screen)
     await query.answer(notice or "")
+
+
+# --------------------------------------------------------------------------- #
+# Premium icons (operators only)
+# --------------------------------------------------------------------------- #
+async def _emoji_status_screen(user_id: uuid.UUID) -> views.Screen:
+    async with session_scope() as session:
+        extracted = await panel_emoji_repo.get_map(session)
+        connections = await connection_repo.list_for_user(session, user_id=user_id)
+    has_user = any(
+        c.kind is ConnectionKind.user and c.status is ConnectionStatus.active for c in connections
+    )
+    return views.premium_icons_status(
+        extracted=extracted,
+        live=premium_icons.enabled(),
+        suspended=premium_icons.suspended(),
+        has_user_connection=has_user,
+    )
+
+
+@router.callback_query(F.data.startswith("op:emoji"))
+async def op_emoji(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    if not await _require_operator(query, is_operator):
+        return
+    action = (query.data or "").split(":")[2] if (query.data or "").count(":") >= 2 else None
+
+    if action == "off":
+        async with session_scope() as session:
+            cleared = await panel_emoji_repo.clear(session)
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="panel_emoji.clear",
+                object_type="panel_emoji",
+                payload={"cleared": cleared},
+            )
+        premium_icons.set_map({})
+        await _render(query, await _emoji_status_screen(user_id))
+        await query.answer("Plain icons.")
+        return
+
+    if action == "run":
+        # Inline rather than queued, like the sign-in flow: a burst of small
+        # searches through the operator's own connection, with the operator
+        # watching. One search per icon the panel draws.
+        async with session_scope() as session:
+            connections = await connection_repo.list_for_user(session, user_id=user_id)
+            candidates = [
+                c
+                for c in connections
+                if c.kind is ConnectionKind.user and c.status is ConnectionStatus.active
+            ]
+            if not candidates:
+                await query.answer(
+                    "Connect a Telegram account first — the Bot API cannot search emoji.",
+                    show_alert=True,
+                )
+                return
+            adapter = await connection_service.adapter_for(session, candidates[0])
+
+        mapping: dict[str, str] = {}
+        try:
+            for emoticon in views.PANEL_EMOJI:
+                ids = await adapter.custom_emoji_ids(emoticon)
+                if not ids and emoticon.endswith("\ufe0f"):
+                    # Some emoji are indexed without their variation selector.
+                    ids = await adapter.custom_emoji_ids(emoticon.rstrip("\ufe0f"))
+                if ids:
+                    mapping[emoticon] = ids[0]
+        except Exception as exc:
+            log.warning("panel_emoji_extraction_failed", error=str(exc))
+            await query.answer(f"Extraction failed: {_describe(exc)}"[:180], show_alert=True)
+            return
+
+        async with session_scope() as session:
+            await panel_emoji_repo.replace(session, mapping=mapping)
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="panel_emoji.extract",
+                object_type="panel_emoji",
+                payload={"matched": len(mapping), "of": len(views.PANEL_EMOJI)},
+            )
+        premium_icons.set_map(mapping)
+        await _render(query, await _emoji_status_screen(user_id))
+        await query.answer(f"Matched {len(mapping)} of {len(views.PANEL_EMOJI)} icons.")
+        return
+
+    await _render(query, await _emoji_status_screen(user_id))
+    await query.answer()
 
 
 # --------------------------------------------------------------------------- #

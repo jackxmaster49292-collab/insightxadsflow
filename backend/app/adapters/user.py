@@ -301,6 +301,16 @@ class UserAdapter:
             return AccessReport.denied(classify_error(exc).code)
         return AccessReport.ok()
 
+    async def custom_emoji_ids(self, emoticon: str) -> list[str]:
+        await self._ready()
+        from telethon.tl.functions.messages import SearchCustomEmojiRequest
+
+        result = await self._client(SearchCustomEmojiRequest(emoticon=emoticon, hash=0))
+        # EmojiListNotModified carries no ids; with hash=0 it should not occur,
+        # but "should not" is not a parser.
+        ids = getattr(result, "document_id", None) or []
+        return [str(document_id) for document_id in ids]
+
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
         await self._ready()
         try:

@@ -899,6 +899,27 @@ class IdempotencyKey(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PanelEmoji(Base):
+    """The panel's premium icons: one row per unicode emoji the panel uses.
+
+    Extracted by an operator from a connected account's emoji search, because
+    custom emoji ids are Telegram documents — there is nothing to hardcode.
+    Presence of rows is the on/off switch: rows exist, the panel renders its
+    icons as custom emoji; table empty, it renders plain unicode. Whether the
+    custom emoji actually *display* depends on the bot having a Fragment
+    username — Telegram's restriction, not ours — so rendering degrades to the
+    embedded fallback emoji rather than failing.
+    """
+
+    __tablename__ = "panel_emoji"
+
+    emoticon: Mapped[str] = mapped_column(String(16), primary_key=True)
+    custom_emoji_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

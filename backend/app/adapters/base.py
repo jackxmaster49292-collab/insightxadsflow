@@ -209,6 +209,15 @@ class TelegramAdapter(Protocol):
 
     async def check_destination_access(self, ref: ChatRef) -> AccessReport: ...
 
+    async def custom_emoji_ids(self, emoticon: str) -> list[str]:
+        """Custom-emoji document ids Telegram offers for one unicode emoji.
+
+        Empty when the provider cannot search (the Bot API has no such method)
+        or when nothing matches. Ids are Telegram documents, so extraction is
+        the only honest source — there is no table to ship.
+        """
+        ...
+
     def receive_new_messages(self) -> AsyncIterator[InboundMessage]: ...
 
     async def forward_message(

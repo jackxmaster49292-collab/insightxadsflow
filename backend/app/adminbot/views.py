@@ -223,9 +223,115 @@ def home(
             ],
             # Only operators see this, and only they can reach the handler —
             # hiding the button is presentation, the middleware is the gate.
-            [InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0")]
+            [
+                InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0"),
+                InlineKeyboardButton(text="✨ Icons", callback_data="op:emoji"),
+            ]
             if is_operator
             else [],
+        ),
+    )
+
+
+#: Every unicode emoji the panel draws in message text. The union of the status
+#: icons and the screen furniture, deduplicated in place. Extraction walks this
+#: list; anything Telegram has no premium version of simply stays plain.
+PANEL_EMOJI: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        [
+            *STATUS_ICON.values(),
+            "📡",
+            "📣",
+            "💬",
+            "🧾",
+            "📊",
+            "🚀",
+            "⚠️",
+            "🔁",
+            "⏱",
+            "🖼",
+            "✏️",
+            "🗑",
+            "🏠",
+            "⬅️",
+            "➡️",
+            "➕",
+            "💭",
+            "👥",
+            "✨",
+            "🔄",
+            "▶️",
+            "🔥",
+        ]
+    )
+)
+
+
+def premium_icons_status(
+    *,
+    extracted: dict[str, str],
+    live: bool,
+    suspended: bool,
+    has_user_connection: bool,
+) -> Screen:
+    """The operator's premium-icon screen: what is extracted, and the truth
+    about whether Telegram will draw it.
+
+    The Fragment sentence is not small print. Without that username Telegram
+    rejects every custom-emoji message a bot sends, and an operator who was not
+    told would read the plain icons as this feature being broken.
+    """
+    lines = ["✨ *Premium icons*", ""]
+    if extracted:
+        lines.append(f"*Extracted* — {len(extracted)} of {len(PANEL_EMOJI)} icons")
+        if suspended:
+            lines += [
+                "",
+                "⚠️ *Telegram refused them\\.* Custom emoji from a bot only "
+                "render when the bot owns a *Fragment username* — that is "
+                "Telegram's rule for every bot, and until then the panel shows "
+                "plain icons\\. The extracted ids are kept; extraction again, or "
+                "a restart, retries\\.",
+            ]
+        elif live:
+            lines += ["", "Live — the panel is sending its icons as custom emoji\\."]
+    else:
+        lines += [
+            "The panel currently draws plain unicode icons\\.",
+            "",
+            "Extraction asks Telegram, through your connected account, which "
+            "custom emoji match each icon the panel uses, and stores their "
+            "ids\\. Nothing is hardcoded — the ids are Telegram documents\\.",
+        ]
+    lines += [
+        "",
+        "Two Telegram rules apply to every bot:",
+        "• *Buttons never change* — button labels cannot carry custom emoji\\.",
+        "• *Message icons render only if the bot owns a Fragment username*\\. "
+        "Without one, the panel quietly stays plain rather than breaking\\.",
+    ]
+    if not has_user_connection:
+        lines += [
+            "",
+            "Extraction needs a connected *account* \\(not a bot\\) to search "
+            "with — connect one under *Accounts* first\\.",
+        ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            [
+                InlineKeyboardButton(
+                    text="🔁 Extract again" if extracted else "✨ Extract now",
+                    callback_data="op:emoji:run",
+                )
+            ]
+            if has_user_connection
+            else [],
+            [InlineKeyboardButton(text="🚫 Turn off", callback_data="op:emoji:off")]
+            if extracted
+            else [],
+            _back("nav:home"),
         ),
     )
 

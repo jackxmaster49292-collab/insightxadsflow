@@ -213,6 +213,22 @@ What the reasons mean in practice:
 * **A long Telegram wait** pauses the whole ad — and it now resumes by itself
   the moment the wait is over. The wait is obeyed in full, never shortened.
 
+### Premium icons on the panel itself (operators)
+
+**✨ Icons** on the operator home turns the panel's own icons into custom
+\(premium\) emoji. Tapping **Extract now** asks Telegram — through your
+connected account — which custom emoji match each icon the panel draws, and
+stores their ids; nothing is hardcoded.
+
+Two Telegram rules apply to **every** bot, and no setting changes them:
+
+* **Buttons never change.** Telegram button labels cannot carry custom emoji.
+* **Message icons render only if the bot owns a Fragment username.** Without
+  one Telegram rejects custom-emoji messages outright — so this panel quietly
+  falls back to plain icons rather than breaking, and the ✨ Icons screen says
+  that is what happened. Buy the bot a username on fragment.com and the same
+  extracted icons start rendering, no re-deploy needed — just extract again.
+
 ### Why it goes group by group
 
 Posting pauses between groups — 3 seconds by default, changeable with **⏱

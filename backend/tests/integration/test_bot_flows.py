@@ -52,6 +52,9 @@ ADMIN_CHAT = 900_100_200
 #: close formatting. Source: Bot API "Formatting options".
 MDV2_MUST_ESCAPE = set(r"[]()~>#+-=|{}.!")
 
+#: The one piece of bracket syntax the panel emits: an inline custom emoji.
+CUSTOM_EMOJI_TOKEN = re.compile(r"!\[[^\]]+\]\(tg://emoji\?id=\d+\)")
+
 
 def assert_valid_markdown_v2(text: str) -> None:
     """Reject the two escaping mistakes Telegram rejects.
@@ -71,6 +74,12 @@ def assert_valid_markdown_v2(text: str) -> None:
     opened = {"_": 0, "*": 0}
 
     while index < len(text):
+        # A custom-emoji token — ``![🔥](tg://emoji?id=N)`` — is markup, so its
+        # brackets and parens are legitimately unescaped. Skipped whole.
+        token = CUSTOM_EMOJI_TOKEN.match(text, index)
+        if token and not inside_code:
+            index = token.end()
+            continue
         char = text[index]
         if char == "\\":
             index += 2  # escaped: literal, and not a delimiter

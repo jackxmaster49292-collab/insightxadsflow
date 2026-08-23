@@ -22,12 +22,13 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from app import preflight
-from app.adminbot import notifier
+from app.adminbot import notifier, premium_icons
 from app.adminbot.auth import AccessMiddleware
 from app.adminbot.handlers import router
 from app.config import get_settings
-from app.db.session import dispose_engine
+from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
+from app.repositories import panel_emoji as panel_emoji_repo
 from app.security.ratelimit import close_redis
 
 log = structlog.get_logger(__name__)
@@ -121,6 +122,11 @@ async def run() -> None:
                     "an account from the panel."
                 ),
             )
+
+        # The premium-icon map survives restarts in Postgres; load it before
+        # the first screen renders so the panel does not flicker plain→premium.
+        async with session_scope() as session:
+            premium_icons.set_map(await panel_emoji_repo.get_map(session))
 
         await _register_commands(bot)
         alerts = asyncio.create_task(notifier.run(bot, _stop))

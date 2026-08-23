@@ -570,6 +570,33 @@ titles under Telegram's 4096. Titles are escaped like everything else.
 one instead of hiding on page fourteen. The Events screen remains the
 chronological view; this is the per-group one.
 
+### ADR-047 — Premium panel icons: extracted, applied centrally, degraded honestly
+**Context.** The operator asked for the panel's own unicode icons to render as
+Telegram custom (premium) emoji. Two Telegram rules bound what is possible for
+*any* bot: button labels cannot carry entities at all, and a bot may only send
+custom emoji in message text if it owns a **Fragment username** — otherwise
+Telegram rejects the whole message.
+**Decision.** Three parts. *Extraction*: custom emoji ids are Telegram
+documents, so nothing is hardcoded — an operator taps ✨ Icons and the ids are
+fetched through their own connected account (``messages.searchCustomEmoji``,
+one query per icon the panel draws) and stored in ``panel_emoji``; rows present
+is the on-switch. *Application*: one transform at the send boundary rewrites
+every mapped emoji in outgoing message text as ``![🔥](tg://emoji?id=N)`` — a
+single regex pass, longest emoticon first, so a variation-selector form cannot
+be wrapped twice and the transform never revisits its own output. Applied
+centrally in ``_deliver`` rather than in forty views, so coverage is every
+screen at once; button labels are separate objects and stay plain
+automatically. *Degradation*: if Telegram rejects a premium message — the
+Fragment rule, or length growth — the transform is suspended for the process,
+the plain text is resent, and the operator screen says exactly why the icons
+are not showing. A degraded icon is a shrug; a blank panel is an outage.
+**Consequence.** On a bot with a Fragment username the whole panel upgrades,
+including emoji inside ad previews that happen to be in the extracted set. On
+any other bot the first premium send fails once, quietly, and everything stays
+plain — with the reason stated on the ✨ Icons screen instead of left to be
+discovered. The MarkdownV2 checker learned the custom-emoji token; the fallback
+emoji embedded in each token is what renders anywhere the premium one cannot.
+
 ---
 
 ## Open tradeoffs
