@@ -441,6 +441,55 @@ exist, so the gap between "719 synced" and "40 listed" reads as a filter rather
 than a bug. Private chats and channels stay synchronized, because forwarding
 uses them as sources.
 
+### ADR-039 — An ad repeats on a floor of one hour, measured from the round finishing
+**Context.** The requested feature is an ad that posts to the same groups again
+after an interval, indefinitely. Two ways to build it are wrong. Scheduling the
+next round *N* minutes after the previous one **started** means a slow round
+across 300 groups leaves almost no gap, and on a bad day round two begins while
+round one is still running — the same group receives the ad twice in a row.
+Allowing any interval means a five-minute repeat, which is not a schedule but a
+flood.
+**Decision.** ``repeat_every_s`` is measured from the moment the round finishes,
+in ``settle()``. A repeat below ``min_broadcast_repeat_s`` (default one hour) is
+refused, as is any repeat shorter than one round's own estimated duration —
+both with the arithmetic in the message. ``0`` means post once, which stays the
+default: repeating is turned on deliberately.
+**Consequence.** The floor protects the customer, not the service: the account
+posting the same message into the same group every five minutes is theirs, and
+it is theirs that Telegram restricts. A repeating ad never completes on its own
+— stopping it is always a decision someone makes, which is the point. Rounds
+are counted (``repeat_count``) and the next start time is shown.
+
+### ADR-040 — The next round is paced like the first
+**Context.** Reopening a round is a bulk update, and the obvious implementation
+gives every target the same ``not_before``.
+**Decision.** ``reopen_for_repeat`` staggers by ``delay_ms`` from the target's
+position, exactly as the first round is staggered.
+**Consequence.** Without this, round two hands the worker all 500 targets at
+once and posts to every group as fast as the connection allows — which is what
+the pause between groups exists to prevent, on the round where it matters most.
+Covered by ``test_the_next_round_is_paced_like_the_first``, verified by
+restoring the bug. Every target is reopened, including ones that refused last
+round: a refusal is a fact about a moment, and re-checking is how regained
+permission gets noticed.
+
+### ADR-041 — A preview is clipped by its escaped length
+**Context.** The compose screen clipped the ad at 400 raw characters, hiding the
+end of nearly every real ad. Raising the clip to 2800 raw characters would have
+been a bug: MarkdownV2 escaping nearly doubles a body of punctuation, and a
+4096-character reply is a 400 from Telegram — which blanks the whole screen,
+the same failure class as ADR-021's unescaped underscore.
+**Decision.** ``views.preview()`` budgets against the **escaped** length and
+walks whole characters, so a cut can never land between a backslash and what it
+escapes and leave a dangling one. Both ad screens and the auto-reply screen use
+it.
+**Consequence.** Ads now show whole. ``test_the_longest_possible_ad_still_fits_a_telegram_message``
+renders a maximum-length ad of nothing but escapable characters on both screens
+and asserts the result is under 4096; with the raw-length clip it produced 5952.
+The preview is still plain text — a bot cannot render a custom emoji at all, so
+the formatting summary remains the only honest way to confirm premium emoji
+survived without posting the ad.
+
 ---
 
 ## Open tradeoffs

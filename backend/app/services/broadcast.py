@@ -20,7 +20,7 @@ from synchronized membership, and the pre-send check is the second gate.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,6 +94,24 @@ def validate(broadcast: Broadcast, *, target_count: int) -> None:
             f"This broadcast has {target_count} groups and the limit is "
             f"{settings.max_broadcast_targets}. Split it into more than one broadcast."
         )
+
+    if broadcast.repeat_every_s is not None:
+        floor = settings.min_broadcast_repeat_s
+        if broadcast.repeat_every_s < floor:
+            raise BroadcastValidationError(
+                f"The shortest repeat is {_humanize(floor)}. The same message "
+                "arriving in the same group more often than that is what gets an "
+                "account reported and banned."
+            )
+        # One round has to finish before the next begins, or rounds pile up.
+        one_round = estimated_duration_s(broadcast.delay_ms, target_count)
+        if broadcast.repeat_every_s <= one_round:
+            raise BroadcastValidationError(
+                f"One round across {target_count} groups takes about "
+                f"{_humanize(one_round)}, which is longer than the "
+                f"{_humanize(broadcast.repeat_every_s)} repeat. Raise the repeat "
+                "or lower the pause between groups."
+            )
 
     # delay_ms multiplies by the number of groups, so a generous pause across a
     # large list can push the tail days out. Say so now, with the number.
@@ -354,14 +372,38 @@ async def execute_target(
 
 
 async def settle(session: AsyncSession, *, broadcast: Broadcast) -> bool:
-    """Mark the broadcast complete once nothing is left to deliver."""
+    """Finish the round: either the ad is done, or the next one is scheduled.
+
+    Returns True only when the broadcast is finished for good. A repeating ad
+    never reaches that state on its own — stopping it is always a decision
+    someone makes, which is the point.
+    """
     if broadcast.status is not BroadcastStatus.sending:
         return False
     remaining = await broadcast_repo.remaining_count(session, broadcast_id=broadcast.id)
     if remaining:
         return False
+
+    broadcast.repeat_count += 1
+
+    if broadcast.repeat_every_s:
+        # The gap is measured from the round *finishing*, not from when it
+        # started. Otherwise a slow round across 300 groups would eat into the
+        # interval and the next one could follow almost immediately.
+        start_at = datetime.now(UTC) + timedelta(seconds=broadcast.repeat_every_s)
+        broadcast.next_run_at = start_at
+        await broadcast_repo.reopen_for_repeat(session, broadcast=broadcast, start_at=start_at)
+        log.info(
+            "broadcast_round_complete",
+            broadcast_id=str(broadcast.id),
+            round=broadcast.repeat_count,
+            next_run_at=start_at.isoformat(),
+        )
+        return False
+
     broadcast.status = BroadcastStatus.completed
     broadcast.completed_at = datetime.now(UTC)
+    broadcast.next_run_at = None
     return True
 
 

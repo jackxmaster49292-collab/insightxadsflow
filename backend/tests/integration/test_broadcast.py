@@ -9,11 +9,12 @@ refuses to post where the account is not allowed.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from app.adapters.base import AmbiguousDeliveryError, ChatRef, PeerKind
+from app.adapters.base import AccessReport, AmbiguousDeliveryError, ChatRef, PeerKind
 from app.adapters.errors import AdapterError, ErrorClass
 from app.config import get_settings
 from app.db.models import (
@@ -575,3 +576,179 @@ def test_a_broadcast_never_addresses_a_peer_it_was_not_given():
     """There is no discovery path: targets come from stored membership only."""
     ref = ChatRef(PeerKind.channel, -100)
     assert ref.peer_type is PeerKind.channel
+
+
+# --------------------------------------------------------------------------- #
+# Repeating
+# --------------------------------------------------------------------------- #
+async def test_a_repeating_ad_reopens_the_same_groups_instead_of_finishing(client, actor, session):
+    """The whole point of the feature: the round ends, the ad does not."""
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.refresh(broadcast)
+
+    assert broadcast.status is BroadcastStatus.sending, "a repeating ad never completes itself"
+    assert broadcast.completed_at is None
+    assert broadcast.repeat_count == 1
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    assert counts == {"pending": 3}, "the same groups are queued again"
+
+    gap = (broadcast.next_run_at - datetime.now(UTC)).total_seconds()
+    assert 7100 < gap <= 7200, "measured from the round finishing, not from when it started"
+
+
+async def test_the_next_round_is_paced_like_the_first(client, actor, session):
+    """Reopening 500 targets on the same timestamp would post to all of them at
+    once — which is the one thing the pause between groups exists to prevent."""
+    ctx = await build_broadcast(actor, session, groups=4, delay_ms=3000)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    spacing = [
+        (b.not_before - a.not_before).total_seconds()
+        for a, b in zip(targets, targets[1:], strict=False)
+    ]
+    assert spacing == [3.0, 3.0, 3.0]
+
+
+async def test_the_next_round_is_not_due_yet(client, actor, session):
+    """Written against the worker's own query, so it cannot pass while the
+    worker would still pick the targets up immediately."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    claimed = await broadcast_repo.claim_batch(
+        session, owner="test-worker", limit=10, lease_seconds=60
+    )
+    assert claimed == [], "nothing is due until the interval has passed"
+
+
+async def test_a_group_that_refused_last_round_is_tried_again(client, actor, session):
+    """A refusal is a fact about a moment. An admin can grant permission back,
+    and re-checking is the only way that gets noticed."""
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    script = script_for(ctx["connection_id"])
+    # Resolved the same way delivery resolves it, so the test cannot pass
+    # against a peer the sender would never address.
+    from app.db.models import TelegramChat
+    from app.repositories import chats as chat_repo
+
+    blocked = chat_repo.to_ref(await session.get(TelegramChat, ctx["chat_ids"][1]))
+    script.destination_allowed[blocked.key] = AccessReport(
+        allowed=False, reason_code=reasons.DESTINATION_NOT_ELIGIBLE
+    )
+
+    outcomes = await drain(session, broadcast.id)
+    assert [o.status for o in outcomes].count(JobStatus.skipped) == 1
+
+    await session.refresh(broadcast)
+    assert broadcast.repeat_count == 1, "a skipped group still ends the round"
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    assert counts == {"pending": 3}, "including the one that refused"
+
+    # Permission comes back; the next round posts there.
+    script.destination_allowed.pop(blocked.key)
+    outcomes = await drain(session, broadcast.id)
+    assert all(o.status is JobStatus.succeeded for o in outcomes)
+
+
+async def test_an_ad_without_a_repeat_still_completes(client, actor, session):
+    """The default is unchanged: post once, then stop."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    assert broadcast.repeat_every_s is None
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.refresh(broadcast)
+
+    assert broadcast.status is BroadcastStatus.completed
+    assert broadcast.completed_at is not None
+    assert broadcast.next_run_at is None
+    assert broadcast.repeat_count == 1
+
+
+async def test_a_repeat_under_the_floor_is_refused(client, actor, session):
+    """The account that would get banned for posting the same thing every five
+    minutes is the customer's own."""
+    floor = get_settings().min_broadcast_repeat_s
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = floor - 1
+
+    with pytest.raises(broadcast_service.BroadcastValidationError) as exc:
+        await broadcast_service.queue(session, broadcast=broadcast)
+    assert "reported and banned" in exc.value.message
+    assert broadcast.status is BroadcastStatus.draft
+
+
+async def test_a_repeat_shorter_than_one_round_is_refused(client, actor, session):
+    """Otherwise round two starts while round one is still going and the ad
+    posts to the same group twice in a row."""
+    ctx = await build_broadcast(actor, session, groups=6, delay_ms=1_800_000)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 3600
+
+    with pytest.raises(broadcast_service.BroadcastValidationError) as exc:
+        await broadcast_service.queue(session, broadcast=broadcast)
+    assert "longer than" in exc.value.message
+
+
+async def test_pausing_a_repeating_ad_stops_the_next_round(client, actor, session):
+    """Stopping it is a decision someone makes — and it has to actually stop."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    await broadcast_service.pause(
+        session, broadcast=broadcast, reason_code=reasons.BROADCAST_PAUSED_BY_CUSTOMER
+    )
+    await session.commit()
+
+    # Even once the interval has elapsed, a paused ad feeds the worker nothing.
+    await session.execute(
+        update(BroadcastTarget)
+        .where(BroadcastTarget.broadcast_id == broadcast.id)
+        .values(not_before=datetime.now(UTC) - timedelta(minutes=1))
+    )
+    claimed = await broadcast_repo.claim_batch(
+        session, owner="test-worker", limit=10, lease_seconds=60
+    )
+    assert claimed == []
+    assert reasons.describe(reasons.BROADCAST_PAUSED_BY_CUSTOMER).startswith("You paused")

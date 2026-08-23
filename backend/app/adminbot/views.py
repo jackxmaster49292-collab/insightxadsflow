@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -39,6 +40,14 @@ PAGE_SIZE = 6
 #: Groups per page in the picker. Smaller than PAGE_SIZE because each row also
 #: carries a tick box and the titles run longer.
 PICKER_PAGE_SIZE = 8
+
+#: How much of an ad a screen shows, measured **after** escaping. Telegram caps
+#: a message at 4096 characters, and escaping can nearly double a length before
+#: it is counted, so budgeting on the raw body is how a long ad silently turns
+#: into a 400 and a blank screen. The rest of these screens is a few hundred
+#: characters, so most ads now show whole — the old 400 was an arbitrary clip
+#: that hid the end of every one.
+PREVIEW_CHARS = 2800
 
 STATUS_ICON = {
     "active": "✅",
@@ -593,14 +602,15 @@ def ad_compose(
     has_media = broadcast.media_kind.value != "none"
     body = broadcast.body_text.strip()
 
+    shown, clipped = preview(body)
     lines = [
         f"📝 *{escape(broadcast.name)}*",
         "",
         "*Message*",
-        f"_{escape(body[:400])}_" if body else "_not written yet_",
+        f"_{shown}_" if body else "_not written yet_",
     ]
-    if len(body) > 400:
-        lines.append(f"_…and {len(body) - 400} more characters_")
+    if clipped:
+        lines.append(f"_…and {clipped} more characters_")
     captured = formatting_summary(broadcast.body_entities or [])
     if captured:
         # The preview cannot show any of this — it is plain text, and a bot may
@@ -628,9 +638,10 @@ def ad_compose(
         f"*Image* — {'attached' if has_media else 'none'}",
         f"*Groups* — {target_count} selected",
         f"*Pause between groups* — {seconds_label(broadcast.delay_ms)}",
+        f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}",
     ]
     if target_count:
-        lines.append(f"*Takes about* — {escape(humanize(estimate_s))}")
+        lines.append(f"*Takes about* — {escape(humanize(estimate_s))} per round")
 
     lines += premium_emoji_warning(
         has_premium_emoji=_has_premium_emoji(broadcast),
@@ -655,6 +666,7 @@ def ad_compose(
                 InlineKeyboardButton(text="🖼 Image", callback_data=f"ad:{broadcast.id}:media"),
                 InlineKeyboardButton(text="⏱ Pause", callback_data=f"ad:{broadcast.id}:delay"),
             ],
+            [InlineKeyboardButton(text="🔁 Repeat", callback_data=f"ad:{broadcast.id}:repeat")],
             [
                 InlineKeyboardButton(
                     text=f"💭 Groups ({target_count})",
@@ -699,7 +711,8 @@ def ad_confirm(
         f"*To* — {target_count} groups\n"
         f"*Image* — {'yes' if has_media else 'no'}\n"
         f"*Pause between groups* — {seconds_label(broadcast.delay_ms)}\n"
-        f"*Takes about* — {escape(humanize(estimate_s))}\n"
+        f"*Takes about* — {escape(humanize(estimate_s))} per round\n"
+        f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}\n"
         f"{warning}\n\n"
         "It posts only to groups this account has already joined\\. "
         "You can pause it once it starts, but messages already posted cannot "
@@ -723,9 +736,22 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
 
     lines += [
         f"*Progress* — {done}/{target_count} groups",
-        "",
-        f"_{escape(broadcast.body_text.strip()[:300] or '(image only)')}_",
     ]
+    if broadcast.repeat_every_s:
+        lines.append(f"*Repeat* — every {escape(humanize(broadcast.repeat_every_s))}")
+        if broadcast.repeat_count:
+            lines.append(f"*Rounds sent* — {broadcast.repeat_count}")
+        if broadcast.next_run_at and broadcast.status is BroadcastStatus.sending:
+            lines.append(f"*Next round* — {escape(when(broadcast.next_run_at))}")
+    # The running ad shows as much of itself as the compose screen did, minus
+    # room for the deliveries breakdown below it.
+    shown, clipped = preview(broadcast.body_text.strip(), PREVIEW_CHARS - 400)
+    lines += [
+        "",
+        f"_{shown or escape('(image only)')}_",
+    ]
+    if clipped:
+        lines.append(f"_…and {clipped} more characters_")
 
     if counts:
         lines += [
@@ -866,7 +892,7 @@ def autoreply_screen(*, connection: TelegramConnection | None, reply: AutoReply 
         f"*Status* — {'on ✅' if enabled else 'off'}",
         "",
         "*Reply*",
-        f"_{escape(body[:400])}_" if body else "_not written yet_",
+        f"_{preview(body)[0]}_" if body else "_not written yet_",
         "",
         f"*Same person again after* — {escape(humanize(cooldown))}",
         "",
@@ -1086,6 +1112,22 @@ def seconds_label(milliseconds: int) -> str:
     return escape(f"{milliseconds / 1000:.1f}s")
 
 
+def repeat_label(repeat_every_s: int | None) -> str:
+    return f"every {humanize(repeat_every_s)}" if repeat_every_s else "once, then stop"
+
+
+def when(moment: datetime) -> str:
+    """How long until something happens, in words.
+
+    Relative rather than absolute: the customer's timezone is not reliably
+    known, and "in about 4 hours" needs no conversion to be useful.
+    """
+    seconds = (moment - datetime.now(UTC)).total_seconds()
+    if seconds <= 0:
+        return "any moment"
+    return f"in about {humanize(seconds)}"
+
+
 def humanize(seconds: float) -> str:
     if seconds < 60:
         return f"{int(seconds)} seconds"
@@ -1121,6 +1163,32 @@ def escape(text: str) -> str:
             out.append("\\")
         out.append(char)
     return "".join(out)
+
+
+def preview(body: str, limit: int = PREVIEW_CHARS) -> tuple[str, int]:
+    """An ad, escaped and clipped to fit. Returns the text and what was cut.
+
+    Clipping happens against the escaped length, because escaping is what makes
+    a body overrun Telegram's 4096 — a message of nothing but ``.`` doubles.
+    It also walks whole characters rather than slicing the escaped string, so a
+    cut can never land between a backslash and what it escapes and leave a
+    dangling one, which is a 400 of its own.
+
+    The count returned is in the customer's characters, not escaped ones.
+    """
+    escaped = escape(body)
+    if len(escaped) <= limit:
+        return escaped, 0
+
+    out: list[str] = []
+    used = 0
+    for index, char in enumerate(body):
+        width = 2 if char in _MDV2_SPECIALS else 1
+        if used + width > limit:
+            return "".join(out), len(body) - index
+        out.append(escape(char))
+        used += width
+    return "".join(out), 0
 
 
 def as_uuid(value: str | None) -> uuid.UUID | None:

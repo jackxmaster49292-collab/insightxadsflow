@@ -142,7 +142,7 @@ password if the account has one → **Sync groups**, which reads the groups the 
 joined and records where it may post.
 
 **Posting an ad.** **Ads → New ad** → name → the message → optionally an image → the pause between
-groups → tick the groups → **Send now**. A confirmation screen states the group count, whether an image
+groups → optionally a repeat interval → tick the groups → **Send now**. A confirmation screen states the group count, whether an image
 is attached and roughly how long it will take, and says plainly that posted messages cannot be unsent.
 Progress and per-group outcomes are visible while it runs; **Retry** covers groups that did not receive
 it and never re-posts to one that did.
@@ -165,6 +165,13 @@ text past Telegram's 4096-character limit (1024 with an image), more than `MAX_B
 groups, or a pause that would push the last delivery past six hours are each refused with a sentence
 that says what to change and by how much. One row per group, so the same group cannot be queued twice.
 Pause, resume, stop and retry are all available while sending; stopping cannot unsend.
+
+An ad can **repeat**: after the round finishes, the same groups receive it again once the interval has
+passed, indefinitely, until it is paused or stopped. The interval is measured from the round finishing,
+and two are refused — anything under `MIN_BROADCAST_REPEAT_S` (one hour), and anything shorter than one
+round's own duration, which would start round two before round one had ended (ADR-039). The floor is
+there because the account restricted for posting the same message every few minutes is the customer's
+own. Each round re-checks every group, including any that refused last time.
 
 The image is stored as **bytes**, not a Telegram `file_id`: a `file_id` is scoped to the bot that
 received it, so the admin bot's id is meaningless to the connection doing the posting (ADR-027).

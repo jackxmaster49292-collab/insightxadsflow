@@ -21,8 +21,9 @@ from sqlalchemy import select
 from app.adminbot import views
 from app.adminbot.auth import AccessMiddleware
 from app.config import get_settings
-from app.db.models import AdminNotification, BroadcastStatus, RuleStatus, User
+from app.db.models import AdminNotification, RuleStatus, User
 from app.repositories import admins as admin_repo
+from tests.conftest import fake_broadcast
 
 ADMIN_ID = 900_100_200
 STRANGER_ID = 111_222_333
@@ -309,16 +310,7 @@ def test_every_button_the_screens_emit_fits_the_limit():
         telegram_username="me",
         last_error_message_safe=None,
     )
-    broadcast = SimpleNamespace(
-        id=uuid.uuid4(),
-        name="Ad",
-        status=BroadcastStatus.draft,
-        body_text="hello",
-        body_entities=[],
-        media_kind=SimpleNamespace(value="none"),
-        delay_ms=3000,
-        paused_reason_code=None,
-    )
+    broadcast = fake_broadcast()
 
     screens = [
         views.home(connections=[connection], rules=[], broadcasts=[broadcast], counts={}),

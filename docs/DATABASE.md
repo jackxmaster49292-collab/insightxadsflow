@@ -119,7 +119,8 @@ An "ad": the customer's own message, to be posted to groups they chose.
 `id` · `user_id` · `connection_id` · `name` · `status`
 ENUM(`draft`,`scheduled`,`sending`,`paused`,`completed`,`cancelled`) · `body_text` TEXT · `body_entities` JSONB ·
 `media_kind` ENUM(`none`,`photo`) · `media_bytes` BYTEA NULL · `media_filename` NULL ·
-`delay_ms` INT · `scheduled_for` NULL · `started_at` NULL · `completed_at` NULL ·
+`delay_ms` INT · `repeat_every_s` INT NULL · `repeat_count` INT NOT NULL DEFAULT 0 ·
+`next_run_at` NULL · `scheduled_for` NULL · `started_at` NULL · `completed_at` NULL ·
 `paused_reason_code` NULL
 `body_entities` holds Telegram's own description of the formatting — bold, links and premium emoji as
 offsets into the text. Stored as data rather than Markdown: markup cannot express a custom emoji, and
@@ -129,6 +130,12 @@ UTF-16 code units, as both Telegram APIs use.
 `media_bytes` holds the image itself rather than a Telegram `file_id`, because a `file_id` is scoped to
 the bot that received it and is meaningless to the connection doing the posting (ADR-027). Capped at
 `MAX_BROADCAST_MEDIA_BYTES`.
+`repeat_every_s` NULL means post once and stop, which is the default. Set, it is the gap between the
+end of one round and the start of the next — measured from the round *finishing*, so a slow pass over
+300 groups cannot leave the next one following immediately (ADR-039). Below `MIN_BROADCAST_REPEAT_S`,
+or below one round's own duration, is refused at queue time. A repeating broadcast never reaches
+`completed` on its own; `repeat_count` counts the rounds and `next_run_at` is what the panel shows.
+
 `draft` exists because composing spans several Telegram messages and must survive a bot restart.
 
 ### `broadcast_targets`

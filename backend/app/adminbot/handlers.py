@@ -16,6 +16,7 @@ blocks on Telegram I/O.
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any
 
@@ -985,6 +986,54 @@ async def ad_delay(message: Message, user_id: uuid.UUID, state: FSMContext, **_e
     await _send(message, await _compose_screen(user_id, broadcast_id))
 
 
+@router.message(ComposeAd.repeat)
+async def ad_repeat(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
+    raw = (message.text or "").strip().rstrip("h")
+    try:
+        hours = float(raw)
+    except ValueError:
+        await _ask(message, "Send a number of hours, like `6`, or `0` to post once\\.")
+        return
+
+    # ``inf`` and ``nan`` parse as floats and would reach the database as an
+    # overflow rather than a message anyone can act on.
+    if not math.isfinite(hours) or hours > _MAX_REPEAT_HOURS:
+        await _ask(
+            message,
+            f"Send a number of hours up to {_MAX_REPEAT_HOURS}, or `0` to post once\\.",
+        )
+        return
+
+    settings = get_settings()
+    floor_hours = settings.min_broadcast_repeat_s / 3600
+    if hours and hours < floor_hours:
+        await _ask(
+            message,
+            f"The minimum is {floor_hours:.0f} hour\\. Posting the same message "
+            "into the same group more often than that is what gets an account "
+            "reported and banned\\.",
+        )
+        return
+
+    data = await state.get_data()
+    broadcast_id = views.as_uuid(data.get("broadcast_id"))
+    if broadcast_id is None:
+        await state.clear()
+        await _go_home(message, user_id)
+        return
+
+    async with session_scope() as session:
+        broadcast = await broadcast_repo.get(session, user_id=user_id, broadcast_id=broadcast_id)
+        if broadcast is None:
+            await state.clear()
+            await _go_home(message, user_id)
+            return
+        broadcast.repeat_every_s = int(hours * 3600) if hours else None
+
+    await state.set_state(None)
+    await _send(message, await _compose_screen(user_id, broadcast_id))
+
+
 async def _compose_screen(user_id: uuid.UUID, broadcast_id: uuid.UUID) -> views.Screen:
     async with session_scope() as session:
         broadcast = await broadcast_repo.get(session, user_id=user_id, broadcast_id=broadcast_id)
@@ -998,6 +1047,10 @@ async def _compose_screen(user_id: uuid.UUID, broadcast_id: uuid.UUID) -> views.
         )
 
 
+#: A month. Past this the repeat is not a schedule any more, and a number large
+#: enough to overflow a timestamp is a crash rather than a message.
+_MAX_REPEAT_HOURS = 720
+
 #: Steps that simply ask for the next message, keyed by callback action.
 _AD_PROMPTS = {
     "text": (ComposeAd.text, "Send the message you want posted\\."),
@@ -1010,6 +1063,14 @@ _AD_PROMPTS = {
         ComposeAd.delay,
         "How many seconds between groups? `3` is a sensible default — it keeps "
         "one ad comfortably inside Telegram's limits\\.",
+    ),
+    "repeat": (
+        ComposeAd.repeat,
+        "How often should this ad be posted again, in hours?\n\n"
+        "`6` posts it four times a day\\. Send `0` to post it once and stop\\.\n\n"
+        "The minimum is 1 hour\\. The same message arriving in the same group "
+        "more often than that is what gets an account reported — and it is your "
+        "account, not this bot's\\.",
     ),
 }
 
@@ -1107,13 +1168,17 @@ async def ad_actions(
             from app.domain import reasons
 
             await broadcast_service.pause(
-                session, broadcast=broadcast, reason_code=reasons.BROADCAST_INACTIVE
+                session,
+                broadcast=broadcast,
+                reason_code=reasons.BROADCAST_PAUSED_BY_CUSTOMER,
             )
             notice = "Paused. Groups already posted to stay posted."
 
         elif action == "resume":
             broadcast.status = BroadcastStatus.sending
             broadcast.paused_reason_code = None
+            # Only pending targets are re-timed, so groups already posted to in
+            # this round are not posted to twice.
             await broadcast_repo.schedule_targets(session, broadcast=broadcast)
             notice = "Resumed."
 

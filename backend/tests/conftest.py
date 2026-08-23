@@ -174,6 +174,32 @@ async def other_actor(app) -> AsyncIterator[Actor]:
 # --------------------------------------------------------------------------- #
 # Mock Telegram helpers
 # --------------------------------------------------------------------------- #
+def fake_broadcast(**overrides):
+    """A stand-in for a Broadcast row, for testing screens without a database.
+
+    Shared rather than rebuilt per test file: every one of these is a list of
+    attributes a screen happens to read, so adding a column used to break four
+    files at once with an AttributeError that said nothing about the change.
+    """
+    from types import SimpleNamespace
+
+    fields = {
+        "id": uuid.uuid4(),
+        "name": "Ad",
+        "status": models.BroadcastStatus.draft,
+        "body_text": "hello",
+        "body_entities": [],
+        "media_kind": SimpleNamespace(value="none"),
+        "delay_ms": 3000,
+        "paused_reason_code": None,
+        "repeat_every_s": None,
+        "repeat_count": 0,
+        "next_run_at": None,
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
 def chat_ref(peer_id: int, kind: PeerKind = PeerKind.channel) -> ChatRef:
     return ChatRef(kind, peer_id)
 

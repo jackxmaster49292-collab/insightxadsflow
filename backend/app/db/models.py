@@ -659,6 +659,17 @@ class Broadcast(Base, TimestampMixin):
 
     #: Pause between two deliveries, so one broadcast does not arrive as a burst.
     delay_ms: Mapped[int] = mapped_column(Integer, default=3000, nullable=False)
+    #: Seconds between rounds. NULL means post once and stop, which stays the
+    #: default — repeating is something the customer turns on deliberately.
+    repeat_every_s: Mapped[int | None] = mapped_column(Integer)
+    #: Rounds finished so far. Shown rather than hidden: "sent 14 times" is the
+    #: number that tells someone their ad has been running longer than intended.
+    repeat_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    #: When the next round starts. Derived from the last one finishing, stored
+    #: so the panel can show it without recomputing.
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -40,7 +40,7 @@ from app.db.models import (
     TelegramConnection,
 )
 from app.domain import reasons
-from tests.conftest import connect_bot, discovered, sync_with_chats
+from tests.conftest import connect_bot, discovered, fake_broadcast, sync_with_chats
 
 ADMIN_CHAT = 900_100_200
 
@@ -517,6 +517,46 @@ async def test_a_nonsense_pause_is_rejected(client, actor, state, session):
     assert broadcast.delay_ms == 3000, "unchanged"
 
 
+async def test_the_repeat_can_be_set_and_turned_off(client, actor, state, session):
+    user_id = uuid.UUID(actor.id)
+    await prepare_account(actor, groups=2)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Nightly"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Hi"), user_id=user_id, state=state)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:repeat"), user_id=user_id, state=state)
+    await handlers.ad_repeat(a_message("6"), user_id=user_id, state=state)
+    await session.refresh(broadcast)
+    assert broadcast.repeat_every_s == 21_600
+    assert "every 6" in Sent.last()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:repeat"), user_id=user_id, state=state)
+    await handlers.ad_repeat(a_message("0"), user_id=user_id, state=state)
+    await session.refresh(broadcast)
+    assert broadcast.repeat_every_s is None, "0 means post once"
+    assert "once, then stop" in Sent.last()
+
+
+@pytest.mark.parametrize("answer", ["soon", "0.5", "inf", "nan", "99999", "-3"])
+async def test_a_repeat_that_cannot_be_honoured_is_refused(client, actor, state, session, answer):
+    """`inf` and `nan` parse as floats. Reaching the database, they are an
+    overflow rather than a sentence anyone can act on."""
+    user_id = uuid.UUID(actor.id)
+    await prepare_account(actor, groups=1)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Nightly"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Hi"), user_id=user_id, state=state)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:repeat"), user_id=user_id, state=state)
+    await handlers.ad_repeat(a_message(answer), user_id=user_id, state=state)
+
+    await session.refresh(broadcast)
+    assert broadcast.repeat_every_s is None, "left unchanged"
+    assert_valid_markdown_v2(Sent.last())
+
+
 async def test_starting_a_second_ad_discards_the_unfinished_one(client, actor, state, session):
     """Two half-written ads carrying identical buttons would be impossible to
     tell apart in a chat."""
@@ -808,17 +848,8 @@ def a_connection(status: str, kind: str = "user"):
     )
 
 
-def a_broadcast(status):
-    return SimpleNamespace(
-        id=uuid.uuid4(),
-        name="Ad",
-        status=status,
-        body_text="hello",
-        body_entities=[],
-        media_kind=SimpleNamespace(value="none"),
-        delay_ms=3000,
-        paused_reason_code=None,
-    )
+def a_broadcast(status, **overrides):
+    return fake_broadcast(status=status, **overrides)
 
 
 def a_rule(status):

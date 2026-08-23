@@ -17,7 +17,13 @@ from sqlalchemy import select
 from app.adapters.base import TextEntity
 from app.db.models import Broadcast, BroadcastMedia, BroadcastStatus
 from app.services import broadcast as broadcast_service
-from tests.conftest import connect_bot, discovered, script_for, sync_with_chats
+from tests.conftest import (
+    connect_bot,
+    discovered,
+    fake_broadcast,
+    script_for,
+    sync_with_chats,
+)
 from tests.integration.test_broadcast import build_broadcast, drain
 
 #: A realistic ad: a bold headline, a premium emoji, and a link.
@@ -427,19 +433,12 @@ def test_the_compose_screen_explains_why_its_own_preview_looks_plain():
     """The preview is escaped plain text, and this bot could not render a custom
     emoji even if it tried — the Bot API reserves those for bots with a Fragment
     username. Without saying so, the preview reads as the result."""
-    from types import SimpleNamespace
-
     from app.adminbot import views
 
-    broadcast = SimpleNamespace(
-        id=uuid.uuid4(),
+    broadcast = fake_broadcast(
         name="Sale",
-        status=BroadcastStatus.draft,
         body_text="INSIGHT STORE",
         body_entities=[{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"}],
-        media_kind=SimpleNamespace(value="none"),
-        delay_ms=3000,
-        paused_reason_code=None,
     )
     screen = views.ad_compose(
         broadcast=broadcast, target_count=1, estimate_s=0, account_is_premium=True
@@ -585,20 +584,9 @@ def test_an_ad_with_no_formatting_still_disables_parsing(client, actor):
 def test_the_compose_screen_says_when_nothing_was_captured():
     """An absent line reads as "not applicable". A line saying none is what
     answers "why are my premium emoji missing?"."""
-    from types import SimpleNamespace
-
     from app.adminbot import views
 
-    broadcast = SimpleNamespace(
-        id=uuid.uuid4(),
-        name="Old draft",
-        status=BroadcastStatus.draft,
-        body_text="INSIGHT STORE",
-        body_entities=[],
-        media_kind=SimpleNamespace(value="none"),
-        delay_ms=3000,
-        paused_reason_code=None,
-    )
+    broadcast = fake_broadcast(name="Old draft", body_text="INSIGHT STORE")
     screen = views.ad_compose(broadcast=broadcast, target_count=1, estimate_s=0)
 
     assert "*Formatting kept* — none" in screen.text
@@ -608,20 +596,139 @@ def test_the_compose_screen_says_when_nothing_was_captured():
 def test_the_truncation_note_stays_with_the_message_it_truncates():
     """It sat after the formatting line, where "…and 199 more characters" read
     as though the 199 characters were formatting."""
-    from types import SimpleNamespace
-
     from app.adminbot import views
 
-    broadcast = SimpleNamespace(
-        id=uuid.uuid4(),
+    broadcast = fake_broadcast(
         name="Long",
-        status=BroadcastStatus.draft,
-        body_text="x" * 600,
+        body_text="x" * (views.PREVIEW_CHARS + 200),
         body_entities=[{"type": "bold", "offset": 0, "length": 4}],
-        media_kind=SimpleNamespace(value="none"),
-        delay_ms=3000,
-        paused_reason_code=None,
     )
     text = views.ad_compose(broadcast=broadcast, target_count=1, estimate_s=0).text
 
     assert text.index("more characters") < text.index("Formatting kept")
+
+
+# --------------------------------------------------------------------------- #
+# Showing the ad back
+# --------------------------------------------------------------------------- #
+def test_a_normal_ad_is_shown_whole():
+    """The old 400-character clip hid the end of nearly every real ad."""
+    from app.adminbot import views
+
+    body = "Our October offer is live. " * 40  # ~1080 characters
+    screen = views.ad_compose(
+        broadcast=fake_broadcast(body_text=body), target_count=1, estimate_s=0
+    )
+    assert "more characters" not in screen.text
+    assert views.escape(body.strip()) in screen.text
+
+
+def test_a_clip_is_measured_after_escaping():
+    """Escaping nearly doubles a body of punctuation. Budgeting on the raw
+    length is how a long ad becomes a 400 and a blank screen instead."""
+    from app.adminbot import views
+
+    shown, clipped = views.preview("." * 4000)
+    assert len(shown) <= views.PREVIEW_CHARS
+    assert clipped == 4000 - len(shown) // 2
+
+
+def test_a_clip_never_leaves_a_dangling_backslash():
+    """A cut landing between a backslash and the character it escapes is itself
+    a 400 — the same class of failure as an unescaped underscore."""
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    for limit in range(1, 60):
+        shown, _ = views.preview("a.b-c!d(e)f", limit=limit)
+        assert not shown.endswith("\\"), f"limit {limit} split an escape pair"
+        assert_valid_markdown_v2(shown)
+
+
+def test_the_longest_possible_ad_still_fits_a_telegram_message():
+    """Both screens render an ad at Telegram's own maximum without exceeding
+    the 4096 the reply itself is capped at."""
+    from app.adminbot import views
+    from app.config import get_settings
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    body = ".!-()" * (get_settings().max_broadcast_text_len // 5)
+    broadcast = fake_broadcast(body_text=body, status=BroadcastStatus.sending, repeat_every_s=7200)
+
+    for screen in (
+        views.ad_compose(broadcast=broadcast, target_count=500, estimate_s=1500),
+        views.ad_detail(
+            broadcast=broadcast,
+            counts={"succeeded": 400, "skipped": 100},
+            target_count=500,
+        ),
+    ):
+        assert len(screen.text) <= 4096, f"{len(screen.text)} characters is a 400 from Telegram"
+        assert_valid_markdown_v2(screen.text)
+
+
+# --------------------------------------------------------------------------- #
+# Repeating, on screen
+# --------------------------------------------------------------------------- #
+def test_the_compose_screen_states_the_repeat_either_way():
+    """Silence would read as "no repeat" to one customer and "every hour" to
+    another. Both cases say which."""
+    from app.adminbot import views
+
+    once = views.ad_compose(broadcast=fake_broadcast(), target_count=1, estimate_s=0)
+    assert "once, then stop" in once.text
+
+    repeating = views.ad_compose(
+        broadcast=fake_broadcast(repeat_every_s=21_600), target_count=1, estimate_s=0
+    )
+    assert "every 6" in repeating.text
+
+
+def test_a_running_repeat_shows_the_rounds_and_the_next_one():
+    from datetime import UTC, datetime, timedelta
+
+    from app.adminbot import views
+
+    broadcast = fake_broadcast(
+        status=BroadcastStatus.sending,
+        repeat_every_s=7200,
+        repeat_count=3,
+        next_run_at=datetime.now(UTC) + timedelta(hours=1, minutes=58),
+    )
+    text = views.ad_detail(broadcast=broadcast, counts={"succeeded": 5}, target_count=5).text
+
+    assert "Rounds sent* — 3" in text
+    assert "Next round" in text
+    assert "2\\.0h" in text or "in about" in text
+
+
+def test_a_paused_repeat_does_not_advertise_a_next_round():
+    """It is not coming, and saying otherwise is the kind of small lie that
+    makes someone stop trusting the rest of the screen."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.adminbot import views
+
+    broadcast = fake_broadcast(
+        status=BroadcastStatus.paused,
+        repeat_every_s=7200,
+        repeat_count=1,
+        next_run_at=datetime.now(UTC) + timedelta(hours=2),
+    )
+    text = views.ad_detail(broadcast=broadcast, counts={}, target_count=2).text
+
+    assert "Next round" not in text
+    assert "Rounds sent* — 1" in text
+
+
+def test_the_repeat_button_fits_telegram_s_callback_limit():
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_keyboard_is_sendable
+
+    screen = views.ad_compose(broadcast=fake_broadcast(), target_count=1, estimate_s=0)
+    assert_keyboard_is_sendable(screen.keyboard)
+    assert any(
+        button.callback_data.endswith(":repeat")
+        for row in screen.keyboard.inline_keyboard
+        for button in row
+    )

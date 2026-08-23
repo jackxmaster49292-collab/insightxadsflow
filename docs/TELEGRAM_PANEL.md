@@ -109,12 +109,13 @@ nothing to offer otherwise, and it says so.
 2. the message, exactly as it should appear;
 3. optionally an image, sent as a *photo* (a caption becomes the ad text);
 4. the pause between groups — 3 seconds is the default;
-5. **Groups**, which opens a tick-box list of **groups** this account can post
+5. **Repeat**, if the ad should keep going out — see below;
+6. **Groups**, which opens a tick-box list of **groups** this account can post
    in — private chats and channels are never offered, because an ad in someone's
    DM is unsolicited messaging and a channel you own is better posted to
    directly. **Select all** takes every group at once; **Select page** takes the
    eight on screen;
-6. **Send now**, which shows a summary and asks once more.
+7. **Send now**, which shows a summary and asks once more.
 
 Your message is posted **exactly as you typed it** — bold, italics, links and
 premium emoji all survive. Write it in Telegram the way you want it to appear
@@ -147,6 +148,34 @@ from it, or from a posted ad — never from the preview.
 The summary tells you how many groups, whether an image is attached, and roughly
 how long it will take. Once sending starts you can pause it — but messages
 already posted cannot be unsent, and the confirmation screen says that.
+
+### Repeating an ad
+
+**🔁 Repeat** on the compose screen asks how many hours between rounds. `6`
+posts it four times a day; `0` posts it once and stops, which is the default.
+
+A round is one pass over every group you picked. When it finishes, the clock
+starts — so a repeat of 6 hours means six hours **after the last group receives
+it**, not six hours after the first. The ad then goes out to the same groups
+again, and keeps doing that until you pause or stop it. A repeating ad never
+finishes on its own.
+
+Two intervals are refused, both with the arithmetic:
+
+* **shorter than an hour.** The account posting the same message into the same
+  group every few minutes is *yours*, and Telegram restricts accounts for
+  exactly that. The tool will not help you do it.
+* **shorter than one round.** If 300 groups at 3 seconds apart take 15 minutes,
+  a 10-minute repeat would start round two before round one had finished and
+  some groups would get the ad twice in a row.
+
+While it runs, the ad's screen shows **Rounds sent** and when the next one is
+due. Each round re-checks every group, including any that refused last time —
+if an admin has since let you post there, the next round gets through.
+
+**⏸ Pause** stops the next round; **▶️ Resume** picks up where it left off
+without re-posting to groups already done in the current round. **🚫 Stop**
+ends it for good.
 
 While it is sending, the ad's screen shows progress, per-group outcomes, and a
 **Retry** button for groups that did not receive it. Retry never re-posts to a

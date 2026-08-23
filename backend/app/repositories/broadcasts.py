@@ -271,6 +271,40 @@ async def reschedule(
     target.last_error_code = error_code
 
 
+async def reopen_for_repeat(
+    session: AsyncSession, *, broadcast: Broadcast, start_at: datetime
+) -> int:
+    """Put every target back to pending for the next round.
+
+    All of them, including ones that were refused last time. A refusal is a fact
+    about that moment — an admin can grant permission, or lift a mute — and
+    re-checking is how that gets noticed. The pre-send check makes a refusal
+    cheap, and the pacer spaces the attempts out anyway.
+
+    The new round is staggered by ``delay_ms`` exactly like the first one. It has
+    to be: giving every target the same ``not_before`` would hand the worker the
+    whole list at once, and a second round is precisely when posting to hundreds
+    of groups in one burst would look like what it would be.
+    """
+    result = await session.execute(
+        select(BroadcastTarget)
+        .where(BroadcastTarget.broadcast_id == broadcast.id)
+        .order_by(BroadcastTarget.position)
+    )
+    targets = list(result.scalars().all())
+    for offset, target in enumerate(targets):
+        target.status = JobStatus.pending
+        target.attempt_count = 0
+        target.not_before = start_at + timedelta(milliseconds=broadcast.delay_ms * offset)
+        target.lease_owner = None
+        target.lease_expires_at = None
+        target.destination_message_id = None
+        target.last_error_class = None
+        target.last_error_code = None
+    await session.flush()
+    return len(targets)
+
+
 async def status_counts(session: AsyncSession, *, broadcast_id: uuid.UUID) -> dict[str, int]:
     result = await session.execute(
         select(BroadcastTarget.status, func.count())

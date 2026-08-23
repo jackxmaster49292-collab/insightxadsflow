@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     #: the Bot API refuses to serve a file larger than 20 MB.
     max_broadcast_media_bytes: int = 5 * 1024 * 1024
 
+    #: Shortest gap between two rounds of a repeating ad.
+    #:
+    #: An operational floor, not a product limit. The same message arriving in
+    #: the same group more often than this is what group admins and Telegram
+    #: both read as spam — and the account that gets banned for it is the
+    #: customer's, so the floor protects them rather than us.
+    min_broadcast_repeat_s: int = 3600
+
     # --- Auto-reply ---------------------------------------------------------
     #: How long before the same person may receive another automatic reply.
     #: Not a throttle for our benefit — it is what keeps a reply from becoming

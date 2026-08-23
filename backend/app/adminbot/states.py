@@ -36,6 +36,7 @@ class ComposeAd(StatesGroup):
     text = State()
     media = State()
     delay = State()
+    repeat = State()
     #: The group picker. Its selection and the ordered chat ids it indexes into
     #: are both held in state data under "selected" and "chat_ids".
     picking = State()
