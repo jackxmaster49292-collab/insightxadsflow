@@ -50,12 +50,17 @@ async def reclaim_loop() -> None:
                 jobs = await job_repo.reclaim_expired(session)
                 tasks = await job_repo.reclaim_expired_control(session)
                 targets = await broadcast_repo.reclaim_expired(session)
-            if jobs or tasks or targets:
+                # A broadcast paused for a Telegram wait resumes here, the
+                # moment the wait has fully passed. Without this the wait was
+                # obeyed and then the ad sat paused until someone noticed.
+                resumed = await broadcast_repo.resume_flood_paused(session)
+            if jobs or tasks or targets or resumed:
                 log.info(
                     "leases_reclaimed",
                     jobs=jobs,
                     control_tasks=tasks,
                     broadcast_targets=targets,
+                    broadcasts_resumed=resumed,
                 )
         except Exception as exc:
             log.error("reclaim_failed", error=exc)

@@ -26,7 +26,6 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import (
-    AccessReport,
     AmbiguousDeliveryError,
     TelegramAdapter,
     TextEntity,
@@ -270,33 +269,49 @@ async def execute_target(
         )
 
     # --- revalidate authorization; fail closed on uncertainty ---------------
+    # A check that *errors* and a check that *refuses* are different facts. A
+    # refusal is Telegram saying no, and asking again does not change it. An
+    # error is the check not happening — most often the network blinking — and
+    # skipping the group forever over that is wrong twice: nothing was learned
+    # about the group, and the customer reads "skipped" as "refused". So a
+    # thrown check goes through the same taxonomy as a failed send: transient
+    # errors retry with backoff, a Telegram wait is obeyed, an auth failure
+    # pauses the connection, and only a permanent error skips. Fail-closed is
+    # untouched — nothing is ever sent until a check has actually passed.
     destination_ref = chat_repo.to_ref(chat)
-    access: AccessReport | None
     try:
         access = await adapter.check_destination_access(destination_ref)
-    except Exception as exc:  # a check that errors is not a confirmation
-        classified = classify_error(exc)
+    except Exception as exc:
         log.warning(
-            "broadcast_destination_check_failed", target_id=str(target.id), code=classified.code
+            "broadcast_destination_check_failed",
+            target_id=str(target.id),
+            code=classify_error(exc).code,
         )
-        access = None
+        return await _handle_failure(
+            session,
+            target=target,
+            broadcast=broadcast,
+            destination_id=chat.id,
+            exc=exc,
+            connection=connection,
+            max_attempts=settings.max_attempts,
+        )
 
-    if access is None or not access.allowed:
-        reason = reasons.DESTINATION_NOT_ELIGIBLE if access is None else access.reason_code
+    if not access.allowed:
         await chat_repo.set_access(
             session,
             chat=chat,
             can_read_source=bool(chat.access.can_read_source if chat.access else False),
             source_reason_code=(chat.access.source_reason_code if chat.access else reasons.UNKNOWN),
             can_post_destination=False,
-            destination_reason_code=reason,
+            destination_reason_code=access.reason_code,
             check_source="pre_delivery",
         )
         return await _terminal(
             session,
             target,
             JobStatus.skipped,
-            reason,
+            access.reason_code,
             broadcast_id=broadcast.id,
             destination_id=chat.id,
         )
@@ -483,7 +498,11 @@ async def _handle_failure(
     if classified.error_class is ErrorClass.RATE_LIMIT:
         wait = classified.retry_after_s if classified.retry_after_s is not None else 60.0
         if wait >= settings.flood_wait_pause_threshold_s:
-            await pause(session, broadcast=broadcast, reason_code=reasons.FLOOD_WAIT_PAUSE)
+            # Its own reason code, because its promise is different: this pause
+            # ends by itself. The scheduler resumes the broadcast the moment the
+            # wait Telegram asked for has fully passed — obeyed in full, never
+            # shortened, and never left for the customer to notice and fix.
+            await pause(session, broadcast=broadcast, reason_code=reasons.BROADCAST_FLOOD_WAIT)
             await broadcast_repo.reschedule(
                 session,
                 target=target,
@@ -497,10 +516,10 @@ async def _handle_failure(
                 connection,
                 destination_id,
                 target,
-                reasons.FLOOD_WAIT_PAUSE,
+                reasons.BROADCAST_FLOOD_WAIT,
                 EventOutcome.paused,
             )
-            return DeliveryOutcome(JobStatus.pending, reasons.FLOOD_WAIT_PAUSE, wait)
+            return DeliveryOutcome(JobStatus.pending, reasons.BROADCAST_FLOOD_WAIT, wait)
 
         await broadcast_repo.reschedule(
             session,

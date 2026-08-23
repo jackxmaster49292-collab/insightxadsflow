@@ -193,10 +193,34 @@ posted to again.
 
 A finished ad that some groups refused is **not** shown as a plain green tick —
 the list shows ⚠️ with a delivered count like `3/5`, and the ad's screen says
-*"2 of 5 did not receive it"*. **📊 Events** names each group and the reason —
-usually the account is not allowed to post there any more, or the group vanished.
-On a repeating ad every group is re-checked each round, so a fixed permission
-heals on its own; on a one-shot ad, **Retry** covers the ones that failed.
+*"2 of 5 did not receive it"*.
+
+**🧾 Groups** lists every group by name with what happened to it — problems
+first with the reason under each, then groups still waiting their turn, then
+the delivered ones. **📊 Events** is the same information in time order.
+
+What the reasons mean in practice:
+
+* **A refusal** — the account is not allowed to post there (removed, muted, or
+  the group now requires admin). Asking again does not change a refusal, so it
+  is not retried in this round. On a repeating ad every group is re-checked
+  each round, so a permission that comes back heals on its own; on a one-shot
+  ad, **Retry** covers it.
+* **A network error is not a refusal.** If the connection blinks mid-delivery
+  or mid-check, that group is retried automatically with increasing gaps — it
+  is only given up on after several failed attempts, and then it shows up under
+  **Retry** rather than disappearing.
+* **A long Telegram wait** pauses the whole ad — and it now resumes by itself
+  the moment the wait is over. The wait is obeyed in full, never shortened.
+
+### Why it goes group by group
+
+Posting pauses between groups — 3 seconds by default, changeable with **⏱
+Pause**. That stop-and-go rhythm is deliberate: Telegram allows roughly twenty
+messages per minute into a group and watches the overall rate, and an account
+that blasts hundreds of groups in one burst is an account that gets restricted.
+Groups with slow mode add their own waits, which are obeyed exactly. 158 groups
+at 3 seconds is about 8 minutes for the round.
 
 While it is sending, the ad's screen shows progress, per-group outcomes, and a
 **Retry** button for groups that did not receive it. Retry never re-posts to a

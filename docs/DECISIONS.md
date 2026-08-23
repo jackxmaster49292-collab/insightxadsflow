@@ -526,6 +526,50 @@ now also be given in minutes (``90m``, ``1h 30m``); the parser is strict because
 an interval misread by a factor of sixty posts every minute instead of every
 hour, from the customer's own account. The hourly floor is unchanged.
 
+### ADR-044 — A check that errors is retried; only a check that refuses skips
+**Context.** The pre-send eligibility check failed closed: any exception during
+the check skipped the group permanently. Fail-closed is right — nothing may be
+sent without a passing check — but the network blinking mid-check produced a
+permanent "skipped", which the customer reads as "this group refused you" when
+the truth was "nothing was learned". One group of 158 was lost to exactly this.
+**Decision.** A *thrown* check goes through ``_handle_failure`` — the same
+taxonomy as a failed send: transient errors retry with backoff (bounded by
+``max_attempts``, then a visible dead letter), a Telegram wait is obeyed in
+full, an auth failure pauses the connection, and a permanent error skips. A
+check that *returns* a refusal still skips immediately: Telegram saying no is a
+fact, and asking again does not change it.
+**Consequence.** Fail-closed is untouched — a send still requires a check that
+actually passed; what changed is that the check itself gets the retries the
+send always had. Verified end to end: the check erroring leaves the target
+``pending`` with nothing sent, and the next attempt delivers.
+
+### ADR-045 — A flood-wait pause ends by itself
+**Context.** A Telegram wait past ``flood_wait_pause_threshold_s`` paused the
+whole broadcast — and nothing ever resumed it. The wait was obeyed and then the
+ad sat paused until the customer noticed and tapped Resume, which read as the
+tool stopping at random.
+**Decision.** The pause gets its own reason code, ``BROADCAST_FLOOD_WAIT``,
+whose text makes its promise: "posting continues by itself the moment the wait
+is over". The scheduler's reclaim loop resumes such broadcasts once the
+earliest pending target's ``not_before`` — set from Telegram's own number — has
+passed. Only this code (and its legacy spelling) is swept: a pause the customer
+chose, or one made for editing, ends when *they* say so, never by a sweep.
+**Consequence.** The wait is still obeyed in full and never shortened — the
+sweep runs every 15 s *after* the deadline, so if anything the wait runs long.
+Guarded by ``test_the_sweep_never_resumes_a_pause_the_customer_chose``.
+
+### ADR-046 — The per-group report
+**Context.** "1 of 158 did not receive it" answers *how many*; the customer's
+actual questions are *which group* and *why that one* — and, symmetrically,
+"did group X get it?".
+**Decision.** 🧾 Groups on the ad screen lists every target by name with its
+outcome: problems first with their reason under them, then groups still
+waiting, then delivered ones. Ten per page keeps a page of hostile-length
+titles under Telegram's 4096. Titles are escaped like everything else.
+**Consequence.** Sorting problems first means the one refused group leads page
+one instead of hiding on page fourteen. The Events screen remains the
+chronological view; this is the per-group one.
+
 ---
 
 ## Open tradeoffs

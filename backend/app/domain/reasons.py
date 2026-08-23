@@ -82,6 +82,7 @@ BROADCAST_POSTED: Final = "broadcast_posted"
 BROADCAST_CANCELLED: Final = "broadcast_cancelled"
 BROADCAST_PAUSED_BY_CUSTOMER: Final = "broadcast_paused_by_customer"
 BROADCAST_BEING_EDITED: Final = "broadcast_being_edited"
+BROADCAST_FLOOD_WAIT: Final = "broadcast_flood_wait"
 BROADCAST_EMPTY: Final = "broadcast_empty"
 
 # --- auto-reply -------------------------------------------------------------
@@ -171,6 +172,10 @@ REASON_TEXT: dict[str, str] = {
     ),
     BROADCAST_BEING_EDITED: (
         "Paused while you edit it. Save and resume to continue where it left off."
+    ),
+    BROADCAST_FLOOD_WAIT: (
+        "Telegram asked for a long wait. Posting continues by itself the moment "
+        "the wait is over — nothing for you to do."
     ),
     BROADCAST_EMPTY: "The broadcast has no message to send.",
     AUTO_REPLY_SENT: "Replied automatically to an incoming direct message.",

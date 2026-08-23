@@ -876,7 +876,10 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
             # at some point, and the alternative — build a new one and re-pick 500
             # groups — is not one.
             [InlineKeyboardButton(text="✏️ Edit", callback_data=f"ad:{broadcast.id}:edit")],
-            [InlineKeyboardButton(text="📊 Events", callback_data=f"ad:{broadcast.id}:events")],
+            [
+                InlineKeyboardButton(text="🧾 Groups", callback_data=f"ad:{broadcast.id}:groups:0"),
+                InlineKeyboardButton(text="📊 Events", callback_data=f"ad:{broadcast.id}:events"),
+            ],
             [InlineKeyboardButton(text="🚫 Stop", callback_data=f"ad:{broadcast.id}:cancel")]
             if stoppable
             else [],
@@ -1166,6 +1169,70 @@ def chats_list(*, chats: Sequence, page: int, other_count: int = 0) -> Screen:  
     return Screen(
         "\n".join(lines),
         InlineKeyboardMarkup(inline_keyboard=[_pager("nav:chats:", page, pages), _home_row()]),
+    )
+
+
+#: Report rows per page. Ten keeps a page with reasons under Telegram's cap
+#: even when every title is at its longest.
+REPORT_PAGE_SIZE = 10
+
+#: Sort order for the report: what needs attention first, then what is still
+#: coming, then what worked. The customer opening this screen is looking for
+#: the problems; making them scroll past 150 green ticks to find one ⏭ would
+#: hide the very thing the screen exists to show.
+_REPORT_RANK = {
+    JobStatus.failed: 0,
+    JobStatus.dead_letter: 0,
+    JobStatus.needs_attention: 0,
+    JobStatus.skipped: 1,
+    JobStatus.leased: 2,
+    JobStatus.pending: 2,
+    JobStatus.succeeded: 3,
+}
+
+
+def ad_group_report(
+    *,
+    broadcast: Broadcast,
+    rows: Sequence[tuple],  # type: ignore[type-arg]
+    page: int,
+) -> Screen:
+    """Every group by name, with what happened to it.
+
+    This answers the two questions the counts cannot: *which* group did not get
+    it, and *why that one*. Groups that worked are listed too — "did group X
+    get it?" deserves a lookup, not an inference from the failures.
+    """
+    ordered = sorted(rows, key=lambda pair: (_REPORT_RANK.get(pair[0].status, 2), pair[0].position))
+    window, page, pages = _page_of(ordered, page, REPORT_PAGE_SIZE)
+
+    delivered = sum(1 for target, _ in rows if target.status is JobStatus.succeeded)
+    problems = sum(1 for target, _ in rows if _REPORT_RANK.get(target.status, 2) <= 1)
+
+    lines = [
+        f"🧾 *{escape(broadcast.name)} — groups*",
+        "",
+        f"*Delivered* — {delivered}/{len(rows)}"
+        + (f" · *problems* — {problems}" if problems else ""),
+        "",
+    ]
+    for target, chat in window:
+        lines.append(f"{icon(target.status.value)} *{escape(chat.title)}*")
+        if target.status is JobStatus.succeeded:
+            continue
+        if target.status in (JobStatus.pending, JobStatus.leased):
+            lines.append("   waiting its turn")
+        else:
+            code = target.last_error_code or reasons.UNKNOWN
+            lines.append(f"   {escape(reasons.describe(code))}")
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            _pager(f"ad:{broadcast.id}:groups:", page, pages),
+            _back(f"ad:{broadcast.id}"),
+            _home_row(),
+        ),
     )
 
 

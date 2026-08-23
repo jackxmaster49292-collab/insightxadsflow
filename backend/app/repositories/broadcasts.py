@@ -155,6 +155,19 @@ async def replace_targets(
     return len(wanted)
 
 
+async def targets_with_chats(
+    session: AsyncSession, *, broadcast_id: uuid.UUID
+) -> list[tuple[BroadcastTarget, TelegramChat]]:
+    """Every target of an ad with its group, for the per-group report."""
+    result = await session.execute(
+        select(BroadcastTarget, TelegramChat)
+        .join(TelegramChat, TelegramChat.id == BroadcastTarget.chat_id)
+        .where(BroadcastTarget.broadcast_id == broadcast_id)
+        .order_by(BroadcastTarget.position)
+    )
+    return [(row[0], row[1]) for row in result.all()]
+
+
 async def chat_titles(session: AsyncSession, *, broadcast_id: uuid.UUID) -> dict[uuid.UUID, str]:
     """Group titles for this ad's targets, keyed by chat id.
 
@@ -244,6 +257,43 @@ async def heartbeat(
         .where(BroadcastTarget.id == target_id, BroadcastTarget.lease_owner == owner)
         .values(lease_expires_at=now() + timedelta(seconds=lease_seconds))
     )
+
+
+async def resume_flood_paused(session: AsyncSession) -> int:
+    """Resume broadcasts paused for a Telegram wait, once the wait has passed.
+
+    The wait is obeyed in full — a broadcast resumes only when its earliest
+    pending target's ``not_before`` (set from Telegram's own number) is behind
+    us. Only the flood-wait pause is touched: a pause the customer chose, or one
+    made for editing, ends when *they* say so, never by a sweep. The legacy
+    ``FLOOD_WAIT_PAUSE`` code is included for broadcasts paused before this
+    resume existed, which otherwise stay paused forever.
+    """
+    from app.domain import reasons
+
+    result = await session.execute(
+        select(Broadcast).where(
+            Broadcast.status == BroadcastStatus.paused,
+            Broadcast.paused_reason_code.in_(
+                [reasons.BROADCAST_FLOOD_WAIT, reasons.FLOOD_WAIT_PAUSE]
+            ),
+        )
+    )
+    resumed = 0
+    for broadcast in result.scalars().all():
+        earliest = await session.execute(
+            select(func.min(BroadcastTarget.not_before)).where(
+                BroadcastTarget.broadcast_id == broadcast.id,
+                BroadcastTarget.status == JobStatus.pending,
+            )
+        )
+        due = earliest.scalar_one_or_none()
+        if due is None or due > now():
+            continue
+        broadcast.status = BroadcastStatus.sending
+        broadcast.paused_reason_code = None
+        resumed += 1
+    return resumed
 
 
 async def reclaim_expired(session: AsyncSession, *, limit: int = 200) -> int:

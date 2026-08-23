@@ -1208,6 +1208,16 @@ async def ad_actions(
             await query.answer("Paused while you edit.")
             return
 
+        if action == "groups":
+            page = 0
+            parts = (query.data or "").split(":")
+            if len(parts) > 3 and parts[3].isdigit():
+                page = int(parts[3])
+            rows = await broadcast_repo.targets_with_chats(session, broadcast_id=broadcast.id)
+            await _render(query, views.ad_group_report(broadcast=broadcast, rows=rows, page=page))
+            await query.answer()
+            return
+
         if action == "events":
             events = await event_repo.list_for_broadcast(
                 session, user_id=user_id, broadcast_id=broadcast.id, limit=12

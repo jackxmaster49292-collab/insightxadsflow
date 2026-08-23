@@ -325,8 +325,12 @@ async def test_a_group_it_cannot_post_in_is_skipped_not_retried(client, actor, s
     assert len(script.calls_to("send_text")) == 1, "the forbidden group is never attempted"
 
 
-async def test_a_failing_eligibility_check_fails_closed(client, actor, session):
-    """A check that errors is not a confirmation."""
+async def test_a_failing_eligibility_check_fails_closed_but_not_forever(client, actor, session):
+    """A check that errors is not a confirmation — and it is not a refusal
+    either. The network blinking during the check used to skip the group
+    permanently, which read as "this group refused you" when the truth was
+    "nothing was learned". Now it retries like any transient failure; nothing
+    is ever sent until a check has actually passed."""
     ctx = await build_broadcast(actor, session, groups=1)
     broadcast = await session.get(Broadcast, ctx["broadcast_id"])
     await broadcast_service.queue(session, broadcast=broadcast)
@@ -334,6 +338,8 @@ async def test_a_failing_eligibility_check_fails_closed(client, actor, session):
 
     connection = await session.get(TelegramConnection, broadcast.connection_id)
     adapter = await connection_service.adapter_for(session, connection)
+
+    real_check = adapter.check_destination_access
 
     async def explode(_ref):
         raise RuntimeError("network went away mid-check")
@@ -349,8 +355,80 @@ async def test_a_failing_eligibility_check_fails_closed(client, actor, session):
         session, target=target, adapter=adapter, connection=connection
     )
 
+    assert outcome.status is JobStatus.pending, "scheduled to try again, not given up on"
+    assert target.status is JobStatus.pending
+    assert target.attempt_count == 1
+    sends = script_for(ctx["connection_id"]).calls_to("send_text")
+    assert sends == [], "fail-closed: nothing sent while the check cannot pass"
+
+    # The network comes back; the next attempt delivers.
+    adapter.check_destination_access = real_check  # type: ignore[method-assign]
+    outcome = await broadcast_service.execute_target(
+        session, target=target, adapter=adapter, connection=connection
+    )
+    assert outcome.status is JobStatus.succeeded
+
+
+async def test_a_permanent_check_error_still_skips(client, actor, session):
+    """ "This channel is private" from the check itself is a fact, not a blink."""
+    ctx = await build_broadcast(actor, session, groups=1)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    connection = await session.get(TelegramConnection, broadcast.connection_id)
+    adapter = await connection_service.adapter_for(session, connection)
+
+    async def refuse(_ref):
+        raise AdapterError(reasons.WRITE_FORBIDDEN, ErrorClass.PERMISSION)
+
+    adapter.check_destination_access = refuse  # type: ignore[method-assign]
+
+    target = (
+        await session.execute(
+            select(BroadcastTarget).where(BroadcastTarget.broadcast_id == broadcast.id)
+        )
+    ).scalar_one()
+    outcome = await broadcast_service.execute_target(
+        session, target=target, adapter=adapter, connection=connection
+    )
+
     assert outcome.status is JobStatus.skipped
-    assert outcome.reason_code == reasons.DESTINATION_NOT_ELIGIBLE
+    assert script_for(ctx["connection_id"]).calls_to("send_text") == []
+
+
+async def test_a_check_that_never_recovers_becomes_a_visible_dead_letter(client, actor, session):
+    """Bounded retries, then it shows up in Retry — never a silent skip and
+    never an infinite loop."""
+    ctx = await build_broadcast(actor, session, groups=1)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    connection = await session.get(TelegramConnection, broadcast.connection_id)
+    adapter = await connection_service.adapter_for(session, connection)
+
+    async def explode(_ref):
+        raise RuntimeError("network is having a very bad day")
+
+    adapter.check_destination_access = explode  # type: ignore[method-assign]
+
+    target = (
+        await session.execute(
+            select(BroadcastTarget).where(BroadcastTarget.broadcast_id == broadcast.id)
+        )
+    ).scalar_one()
+
+    outcome = None
+    for _ in range(get_settings().max_attempts):
+        target.status = JobStatus.pending
+        outcome = await broadcast_service.execute_target(
+            session, target=target, adapter=adapter, connection=connection
+        )
+
+    assert outcome is not None
+    assert outcome.status is JobStatus.dead_letter
+    assert script_for(ctx["connection_id"]).calls_to("send_text") == []
 
 
 async def test_a_telegram_wait_is_obeyed_in_full(client, actor, session):
@@ -388,7 +466,49 @@ async def test_a_long_wait_pauses_the_whole_broadcast(client, actor, session):
     await drain(session, broadcast.id)
     await session.refresh(broadcast)
     assert broadcast.status is BroadcastStatus.paused
-    assert broadcast.paused_reason_code == reasons.FLOOD_WAIT_PAUSE
+    assert broadcast.paused_reason_code == reasons.BROADCAST_FLOOD_WAIT
+    assert "by itself" in reasons.describe(reasons.BROADCAST_FLOOD_WAIT)
+
+    # While Telegram's wait is still running, the sweep must not shorten it.
+    resumed = await broadcast_repo.resume_flood_paused(session)
+    assert resumed == 0
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.paused
+
+    # The wait passes; the scheduler's sweep resumes the ad on its own.
+    await session.execute(
+        update(BroadcastTarget)
+        .where(BroadcastTarget.broadcast_id == broadcast.id)
+        .values(not_before=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    resumed = await broadcast_repo.resume_flood_paused(session)
+    assert resumed == 1
+    await session.commit()
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.sending
+    assert broadcast.paused_reason_code is None
+
+
+async def test_the_sweep_never_resumes_a_pause_the_customer_chose(client, actor, session):
+    """ "You paused this ad" has to stay true until they resume it themselves —
+    a sweep overriding a human decision is worse than any stuck state."""
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await broadcast_service.pause(
+        session, broadcast=broadcast, reason_code=reasons.BROADCAST_PAUSED_BY_CUSTOMER
+    )
+    await session.execute(
+        update(BroadcastTarget)
+        .where(BroadcastTarget.broadcast_id == broadcast.id)
+        .values(not_before=datetime.now(UTC) - timedelta(minutes=5))
+    )
+
+    assert await broadcast_repo.resume_flood_paused(session) == 0
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.paused
 
 
 async def test_an_ambiguous_timeout_is_not_retried(client, actor, session):
@@ -878,3 +998,99 @@ async def test_sending_a_completed_ad_again_reopens_every_group(client, actor, s
     await drain(session, broadcast.id)
     await session.refresh(broadcast)
     assert broadcast.status is BroadcastStatus.completed, "and it can finish again"
+
+
+# --------------------------------------------------------------------------- #
+# The per-group report
+# --------------------------------------------------------------------------- #
+async def test_the_group_report_names_every_group_and_what_happened(client, actor, session):
+    """The counts say "1 of 158 did not receive it"; this screen says which one
+    and why. Both questions, by name."""
+    from app.adminbot import views
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    # The middle group refuses.
+    from app.adapters.base import AccessReport as _AccessReport
+    from app.db.models import TelegramChat
+    from app.repositories import chats as chat_repo
+
+    script = script_for(ctx["connection_id"])
+    blocked = chat_repo.to_ref(await session.get(TelegramChat, ctx["chat_ids"][1]))
+    script.destination_allowed[blocked.key] = _AccessReport(
+        allowed=False, reason_code=reasons.WRITE_FORBIDDEN
+    )
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    rows = await broadcast_repo.targets_with_chats(session, broadcast_id=broadcast.id)
+    screen = views.ad_group_report(broadcast=broadcast, rows=rows, page=0)
+
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+    assert "Delivered* — 2/3" in screen.text
+    assert "problems* — 1" in screen.text
+    # The refused group is listed first, by name, with the reason under it.
+    refused_at = screen.text.index("Group 02")
+    assert refused_at < screen.text.index("Group 01")
+    assert reasons.describe(reasons.WRITE_FORBIDDEN)[:20] in screen.text
+
+
+async def test_the_group_report_pages_and_puts_problems_first(client, actor, session):
+    from app.adminbot import views
+
+    ctx = await build_broadcast(actor, session, groups=25, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    from app.adapters.base import AccessReport as _AccessReport
+    from app.db.models import TelegramChat
+    from app.repositories import chats as chat_repo
+
+    script = script_for(ctx["connection_id"])
+    # The very last group refuses — on a position-ordered list it would sit on
+    # the final page, exactly where nobody scrolls.
+    blocked = chat_repo.to_ref(await session.get(TelegramChat, ctx["chat_ids"][-1]))
+    script.destination_allowed[blocked.key] = _AccessReport(
+        allowed=False, reason_code=reasons.WRITE_FORBIDDEN
+    )
+
+    await drain(session, broadcast.id)
+    await session.commit()
+    rows = await broadcast_repo.targets_with_chats(session, broadcast_id=broadcast.id)
+
+    first_page = views.ad_group_report(broadcast=broadcast, rows=rows, page=0)
+    assert "Group 25" in first_page.text, "the one problem leads the first page"
+    assert len(first_page.text) <= 4096
+
+    last_page = views.ad_group_report(broadcast=broadcast, rows=rows, page=2)
+    assert "Group 25" not in last_page.text
+    assert len(last_page.text) <= 4096
+
+
+async def test_a_hostile_group_title_cannot_break_the_report(client, actor, session):
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    target = SimpleNamespace(status=JobStatus.skipped, position=0, last_error_code=None)
+    chat = SimpleNamespace(title="_evil* [x](y) `code` #tag!")
+    screen = views.ad_group_report(
+        broadcast=await session.get(
+            Broadcast, (await build_broadcast(actor, session))["broadcast_id"]
+        ),
+        rows=[(target, chat)],
+        page=0,
+    )
+    assert_valid_markdown_v2(screen.text)
