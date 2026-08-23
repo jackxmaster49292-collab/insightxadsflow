@@ -231,6 +231,12 @@ premium owner is enough here. If Telegram refuses anyway, the panel quietly
 falls back to plain icons rather than breaking, and the ✨ Icons screen says
 that is what happened; extract again after fixing the cause and it retries.
 
+**You should not have to do anything.** When the panel starts and no icons are
+stored yet, it fetches them itself through your connected account — one lookup
+per icon, in the background. Only an *operator's* account is ever used for
+this. The two manual paths below stay for re-running it or for a deployment
+where no account is connected yet.
+
 **The simplest way needs no login**: tap **📥 Send emojis** and send the
 premium emoji from your own keyboard — one message, as many as you like, and
 more messages add more. The ids ride in on the message itself, so nothing

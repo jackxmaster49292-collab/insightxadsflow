@@ -16,6 +16,7 @@ from app.adminbot import premium_icons, views
 from app.repositories import panel_emoji as panel_emoji_repo
 from tests.conftest import connect_bot, script_for
 from tests.integration.test_bot_flows import (
+    ADMIN_CHAT,
     Sent,
     a_callback,
     assert_valid_markdown_v2,
@@ -424,3 +425,141 @@ def test_a_custom_label_is_part_of_the_plain_retry():
     labelled = premium_icons.apply_labels(markup)
     assert labelled.inline_keyboard[0][0].text == "Campaigns"
     premium_icons.set_labels({})
+
+
+# --------------------------------------------------------------------------- #
+# Fetching them without being asked
+# --------------------------------------------------------------------------- #
+async def _operator_account(session, actor, monkeypatch, label="Jack"):
+    """Make ``actor`` an operator with a live Telegram account.
+
+    ``monkeypatch`` rather than assignment: the settings object is cached for
+    the process, and a test that widened the operator list permanently would
+    quietly turn later tests into tests of something else.
+    """
+    from app.config import get_settings
+    from app.db.models import ConnectionKind, ConnectionStatus
+    from app.repositories import connections as connection_repo
+    from app.repositories import users as user_repo
+
+    monkeypatch.setattr(get_settings(), "admin_telegram_ids", str(ADMIN_CHAT), raising=False)
+
+    user = await user_repo.get_by_id(session, uuid.UUID(actor.id))
+    user.telegram_user_id = ADMIN_CHAT
+    connection = await connection_repo.create(
+        session,
+        user_id=uuid.UUID(actor.id),
+        kind=ConnectionKind.user,
+        label=label,
+        status=ConnectionStatus.active,
+    )
+    await session.commit()
+    return connection
+
+
+async def test_icons_are_fetched_at_startup_without_anyone_asking(
+    client, actor, session, monkeypatch
+):
+    """The operator should not have to tap anything: the ids come from Telegram
+    either way, and there is nothing a human adds to the process."""
+    from app.adminbot import icon_setup
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script = script_for(connection.id)
+    for emoticon in views.PANEL_EMOJI:
+        script.custom_emoji[emoticon] = [f"55{abs(hash(emoticon)) % 10**15}"]
+
+    await icon_setup.ensure_icons()
+
+    stored = await panel_emoji_repo.get_map(session)
+    assert len(stored) == len(views.PANEL_EMOJI)
+    assert premium_icons.enabled()
+
+
+async def test_a_restart_does_not_refetch(client, actor, session, monkeypatch):
+    """Forty needless lookups on every restart is not free, and the ids do not
+    change."""
+    from app.adminbot import icon_setup
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script = script_for(connection.id)
+    script.custom_emoji["🔥"] = ["111"]
+
+    await panel_emoji_repo.replace(session, mapping={"🔥": "999"})
+    await session.commit()
+
+    await icon_setup.ensure_icons()
+
+    assert script.calls_to("custom_emoji_ids") == [], "nothing was asked"
+    assert (await panel_emoji_repo.get_map(session))["🔥"] == "999", "kept as stored"
+
+
+async def test_no_operator_account_means_no_fetch_and_no_crash(client, actor, session):
+    """A deployment where nobody has connected an account yet still starts."""
+    from app.adminbot import icon_setup
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    await connect_bot(actor)  # a bot connection cannot search emoji
+    await icon_setup.ensure_icons()
+
+    assert await panel_emoji_repo.get_map(session) == {}
+    assert not premium_icons.enabled()
+
+
+async def test_only_an_operators_account_is_ever_used(client, actor, other_actor, session):
+    """Reaching for a customer's Telegram session to decorate the panel would
+    be using their account for something they never asked for."""
+    from app.adminbot import icon_setup
+    from app.db.models import ConnectionKind, ConnectionStatus
+    from app.repositories import connections as connection_repo
+
+    # A customer — not an operator — with a perfectly usable account.
+    await connection_repo.create(
+        session,
+        user_id=uuid.UUID(other_actor.id),
+        kind=ConnectionKind.user,
+        label="Someone else",
+        status=ConnectionStatus.active,
+    )
+    await session.commit()
+
+    assert await icon_setup.operator_connection(session) is None
+
+    await icon_setup.ensure_icons()
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    assert await panel_emoji_repo.get_map(session) == {}
+
+
+async def test_a_telegram_failure_mid_fetch_does_not_stop_the_panel(
+    client, actor, session, monkeypatch
+):
+    """Icons are decoration. A failure here must never be why the bot is down."""
+    from app.adminbot import icon_setup
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script_for(connection.id).fail_method("custom_emoji_ids", RuntimeError("telegram said no"))
+
+    await icon_setup.ensure_icons()  # must not raise
+
+    assert await panel_emoji_repo.get_map(session) == {}
+
+
+async def test_an_emoji_telegram_has_no_premium_version_of_stays_plain(
+    client, actor, session, monkeypatch
+):
+    """A partial map is the normal outcome, not a failure."""
+    from app.adminbot import icon_setup
+    from app.repositories import panel_emoji as panel_emoji_repo
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script_for(connection.id).custom_emoji["🔥"] = ["12345"]
+
+    await icon_setup.ensure_icons()
+
+    stored = await panel_emoji_repo.get_map(session)
+    assert stored == {"🔥": "12345"}
+    assert premium_icons.apply("🔥 and ✅") == "![🔥](tg://emoji?id=12345) and ✅"

@@ -29,7 +29,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.adminbot import premium_icons, secrets, views
+from app.adminbot import icon_setup, premium_icons, secrets, views
 from app.adminbot.states import (
     ComposeAd,
     ComposeRule,
@@ -2074,15 +2074,8 @@ async def op_emoji(
                 return
             adapter = await connection_service.adapter_for(session, candidates[0])
 
-        mapping: dict[str, str] = {}
         try:
-            for emoticon in views.PANEL_EMOJI:
-                ids = await adapter.custom_emoji_ids(emoticon)
-                if not ids and emoticon.endswith("\ufe0f"):
-                    # Some emoji are indexed without their variation selector.
-                    ids = await adapter.custom_emoji_ids(emoticon.rstrip("\ufe0f"))
-                if ids:
-                    mapping[emoticon] = ids[0]
+            mapping = await icon_setup.fetch_icons(adapter)
         except Exception as exc:
             log.warning("panel_emoji_extraction_failed", error=str(exc))
             await query.answer(f"Extraction failed: {_describe(exc)}"[:180], show_alert=True)

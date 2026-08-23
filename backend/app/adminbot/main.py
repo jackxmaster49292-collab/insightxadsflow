@@ -22,7 +22,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.redis import RedisStorage
 
 from app import preflight
-from app.adminbot import notifier, premium_icons
+from app.adminbot import icon_setup, notifier, premium_icons
 from app.adminbot.auth import AccessMiddleware
 from app.adminbot.handlers import router
 from app.config import get_settings
@@ -92,6 +92,7 @@ async def run() -> None:
 
     bot = Bot(token=token, default=DefaultBotProperties())
     alerts: asyncio.Task[None] | None = None
+    icons: asyncio.Task[None] | None = None
 
     # Everything after the Bot exists goes in the try, so a failure during
     # startup still closes the HTTP session instead of leaking it.
@@ -132,10 +133,18 @@ async def run() -> None:
 
         await _register_commands(bot)
         await _publish_profile(bot)
+        # Backgrounded: forty Telegram lookups must not stand between the
+        # process starting and the panel answering. It no-ops when the icons
+        # are already stored, so a restart costs nothing.
+        icons = asyncio.create_task(icon_setup.ensure_icons())
         alerts = asyncio.create_task(notifier.run(bot, _stop))
         await build_dispatcher().start_polling(bot, allowed_updates=ALLOWED_UPDATES)
     finally:
         _stop.set()
+        if icons is not None:
+            icons.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await icons
         if alerts is not None:
             alerts.cancel()
             with contextlib.suppress(asyncio.CancelledError):

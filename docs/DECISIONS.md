@@ -715,6 +715,27 @@ cost more trust than an empty one that is honest. The third role is named
 remains guard-banned vocabulary (``test_the_word_campaign_is_not_used``), which
 is why the operator's suggested name for it was not used.
 
+### ADR-054 — The panel fetches its own icons, from an operator's account only
+**Context.** ADR-047 shipped extraction behind a button, and ADR-049 added a
+send-the-emoji path. Both still required a person to do something, and the
+operator's objection was fair: the ids come from Telegram either way, and there
+is nothing a human contributes to the process.
+**Decision.** ``icon_setup.ensure_icons()`` runs in the background at panel
+startup: if ``panel_emoji`` is empty and an **operator's** active user account
+exists, it asks Telegram for a custom emoji matching each icon the panel draws
+and stores the result. Backgrounded, because forty lookups must not stand
+between the process starting and the panel answering; skipped entirely when a
+map already exists, so a restart is not forty needless calls; paced at 100 ms,
+because a burst of forty is the kind of thing a rate limiter notices. Both
+manual paths remain and now share the same fetcher, so they cannot drift.
+**Consequence.** Only an operator's connection is ever used. Decorating the
+deployment's own panel with a *customer's* Telegram session would be using
+their account for something they never asked for, and
+``test_only_an_operators_account_is_ever_used`` holds that line. Everything is
+best-effort: no operator account, a Telegram failure mid-fetch, or an emoji
+with no premium version each leave the panel plain rather than broken — a
+partial map is the normal outcome, not a failure.
+
 ---
 
 ## Open tradeoffs
