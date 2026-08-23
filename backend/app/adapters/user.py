@@ -112,9 +112,20 @@ class UserAdapter:
     def session_string(self) -> str:
         return str(self._client.session.save())
 
+    async def _ready(self) -> None:
+        """Connect if we are not already.
+
+        Called at the top of every method that talks to Telegram. A fresh
+        adapter is built per worker task, so the client starts disconnected each
+        time and Telethon refuses requests in that state. Cheap when already
+        connected — it is a flag check, not a round trip.
+        """
+        if not self._client.is_connected():
+            await self._client.connect()
+
     # --- lifecycle ------------------------------------------------------- #
     async def connect(self) -> ConnectionState:
-        await self._client.connect()
+        await self._ready()
         if not await self._client.is_user_authorized():
             return ConnectionState(status="awaiting_code", session_string=self.session_string)
         me = await self._client.get_me()
@@ -135,14 +146,14 @@ class UserAdapter:
         burned in transit. That protection is deliberate and is not worked
         around here.
         """
-        await self._client.connect()
+        await self._ready()
         sent = await self._client.send_code_request(phone)
         return str(sent.phone_code_hash)
 
     async def complete_login(self, phone: str, code: str, phone_code_hash: str) -> ConnectionState:
         from telethon.errors import SessionPasswordNeededError
 
-        await self._client.connect()
+        await self._ready()
         try:
             await self._client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         except SessionPasswordNeededError as exc:
@@ -157,7 +168,7 @@ class UserAdapter:
 
     async def complete_2fa(self, password: str) -> ConnectionState:
         """The password is used once, here, and never persisted in any form."""
-        await self._client.connect()
+        await self._ready()
         await self._client.sign_in(password=password)
         me = await self._client.get_me()
         return ConnectionState(
@@ -175,8 +186,7 @@ class UserAdapter:
 
     async def health_check(self) -> HealthReport:
         try:
-            if not self._client.is_connected():
-                await self._client.connect()
+            await self._ready()
             if not await self._client.is_user_authorized():
                 return HealthReport(healthy=False, reason_code="session_revoked")
             me = await self._client.get_me()
@@ -188,6 +198,7 @@ class UserAdapter:
 
     # --- discovery ------------------------------------------------------- #
     async def list_available_chats(self) -> list[DiscoveredChat]:
+        await self._ready()
         discovered: list[DiscoveredChat] = []
         async for dialog in self._client.iter_dialogs():
             entity = dialog.entity
@@ -208,12 +219,14 @@ class UserAdapter:
         return discovered
 
     async def _entity(self, ref: ChatRef) -> Any:
+        await self._ready()
         if ref.access_hash is not None and ref.peer_type is PeerKind.channel:
             real_id, _ = utils.resolve_id(ref.peer_id)
             return types.InputPeerChannel(channel_id=real_id, access_hash=ref.access_hash)
         return await self._client.get_input_entity(ref.peer_id)
 
     async def check_source_access(self, ref: ChatRef) -> AccessReport:
+        await self._ready()
         try:
             entity = await self._entity(ref)
             # One message is enough to prove the account can read the chat.
@@ -223,6 +236,7 @@ class UserAdapter:
         return AccessReport.ok()
 
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
+        await self._ready()
         try:
             entity = await self._client.get_entity(await self._entity(ref))
             if isinstance(entity, types.Channel):
@@ -247,6 +261,8 @@ class UserAdapter:
     # --- intake ---------------------------------------------------------- #
     async def receive_new_messages(self) -> AsyncIterator[InboundMessage]:
         """Persistent update connection with ``catch_up`` so a restart resumes."""
+
+        await self._ready()
 
         @self._client.on(events.NewMessage(incoming=True))
         async def _on_message(event: Any) -> None:  # pragma: no cover - live path
@@ -290,6 +306,9 @@ class UserAdapter:
         *,
         random_id: int | None = None,
     ) -> DeliveryReceipt:
+        await self._ready()
+        await self._ready()
+        await self._ready()
         """``random_id`` is passed through so Telegram deduplicates a retry
         server-side after an ambiguous timeout."""
         from_peer = await self._entity(source)
@@ -326,6 +345,7 @@ class UserAdapter:
         *,
         preserve_caption: bool = True,
     ) -> DeliveryReceipt:
+        await self._ready()
         if len(message_ids) > 1:
             raise AdapterError(reasons.UNCOPYABLE_MESSAGE, ErrorClass.PERMANENT_CONTENT)
         from_peer = await self._entity(source)
@@ -348,6 +368,7 @@ class UserAdapter:
         *,
         random_id: int | None = None,
     ) -> DeliveryReceipt:
+        await self._ready()
         """MTProto carries a ``random_id``, so a retry after an ambiguous
         timeout is deduplicated by Telegram rather than by us guessing."""
         sent = await self._client.send_message(
@@ -365,6 +386,7 @@ class UserAdapter:
         filename: str = "image.jpg",
         random_id: int | None = None,
     ) -> DeliveryReceipt:
+        await self._ready()
         import io
 
         # Telethon infers the type from the name, so the buffer is named rather

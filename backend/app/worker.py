@@ -226,6 +226,42 @@ async def process_control_task(task: ControlTask) -> None:
             )
             log.warning("control_task_failed", task_id=str(row.id), code=classified.code)
 
+            if row.status is ControlTaskStatus.failed:
+                # The panel showed "queued" and nothing else. Without this, a
+                # failure here is indistinguishable from a button that does
+                # nothing — which is precisely how it was reported.
+                await _report_control_failure(session, task=row, code=classified.code)
+
+
+#: What the customer is told when a queued command gives up, keyed by kind.
+CONTROL_TASK_LABELS = {
+    ControlTaskKind.sync_chats: "Reading your groups",
+    ControlTaskKind.health_check: "Checking the connection",
+    ControlTaskKind.disconnect: "Disconnecting",
+    ControlTaskKind.check_chat_access: "Re-checking a group",
+}
+
+
+async def _report_control_failure(session, *, task: ControlTask, code: str) -> None:  # type: ignore[no-untyped-def]
+    """Push a plain-language alert for a queued command that failed for good."""
+    from app.domain import reasons
+    from app.repositories import admins as admin_repo
+
+    label = CONTROL_TASK_LABELS.get(task.kind, "A background command")
+    await admin_repo.notify(
+        session,
+        user_id=task.user_id,
+        kind="control_task_failed",
+        title=f"{label} failed",
+        body=(
+            f"{label} did not work.\n\n{reasons.describe(code)}\n\n"
+            "Nothing was changed. You can try again from the panel."
+        ),
+        # One alert per task, so a retried task cannot produce a storm.
+        dedupe_key=f"control_task_failed:{task.id}",
+        connection_id=task.connection_id,
+    )
+
 
 async def run() -> None:
     settings = get_settings()

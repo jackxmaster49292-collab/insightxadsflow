@@ -49,12 +49,19 @@ class MockScript:
     username: str = "mock_account"
     next_destination_message_id: int = 1000
     connect_error: BaseException | None = None
+    #: Errors keyed by method name, raised on the next call to that method.
+    #: `delivery_errors` is keyed by destination, which discovery and health
+    #: checks do not have — so a test could not script a failure in either.
+    method_errors: dict[str, BaseException] = field(default_factory=dict)
 
     def record(self, method: str, *args: object, **kwargs: object) -> None:
         self.calls.append(MockCall(method, args, kwargs))
 
     def calls_to(self, method: str) -> list[MockCall]:
         return [c for c in self.calls if c.method == method]
+
+    def fail_method(self, method: str, error: BaseException) -> None:
+        self.method_errors[method] = error
 
     def fail_delivery(self, ref: ChatRef, *errors: BaseException) -> None:
         self.delivery_errors.setdefault(ref.key, []).extend(errors)
@@ -93,6 +100,7 @@ class MockAdapter:
 
     async def health_check(self) -> HealthReport:
         self.script.record("health_check")
+        self._maybe_fail("health_check")
         return HealthReport(
             healthy=self.script.healthy,
             reason_code="ok" if self.script.healthy else "unauthorized",
@@ -103,6 +111,7 @@ class MockAdapter:
     # --- discovery ------------------------------------------------------- #
     async def list_available_chats(self) -> list[DiscoveredChat]:
         self.script.record("list_available_chats")
+        self._maybe_fail("list_available_chats")
         return list(self.script.chats)
 
     async def check_source_access(self, ref: ChatRef) -> AccessReport:
@@ -119,6 +128,11 @@ class MockAdapter:
         for message in list(self.script.inbound):
             yield message
             await asyncio.sleep(0)
+
+    def _maybe_fail(self, method: str) -> None:
+        error = self.script.method_errors.get(method)
+        if error is not None:
+            raise error
 
     # --- delivery -------------------------------------------------------- #
     def _maybe_raise(self, destination: ChatRef) -> None:

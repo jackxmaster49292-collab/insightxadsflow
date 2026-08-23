@@ -208,6 +208,39 @@ def test_a_broadcast_can_only_target_stored_chats():
     assert chat_fk.target_fullname == "telegram_chats.id"
 
 
+def test_every_telegram_call_ensures_a_connection_first():
+    """The worker builds a fresh adapter per task, so the Telethon client starts
+    disconnected every time. A method that goes straight to a request fails with
+    "cannot send requests while disconnected" — which is how Sync groups broke
+    while looking like it simply did nothing.
+
+    Checked structurally because the failure is invisible in review: the method
+    reads perfectly well, it just cannot run.
+    """
+    import ast
+
+    source = (APP_DIR / "adapters" / "user.py").read_text()
+    adapter = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ClassDef) and node.name == "UserAdapter"
+    )
+
+    # `session_string` reads local state; `_ready` is the helper itself;
+    # `disconnect` must work on a client that is already gone.
+    exempt = {"session_string", "_ready", "disconnect", "__init__"}
+
+    offenders = []
+    for node in adapter.body:
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) or node.name in exempt:
+            continue
+        body = ast.get_source_segment(source, node) or ""
+        if "self._client." in body and "self._ready()" not in body:
+            offenders.append(node.name)
+
+    assert not offenders, f"these talk to Telegram without ensuring a connection: {offenders}"
+
+
 def test_the_word_campaign_is_not_used(client, actor):
     """Product terminology is binding: rules are never called campaigns."""
     offenders = [
