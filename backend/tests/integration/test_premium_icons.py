@@ -93,19 +93,58 @@ def test_suspension_stops_the_transform_but_keeps_the_map():
 # --------------------------------------------------------------------------- #
 # The send path
 # --------------------------------------------------------------------------- #
-async def test_screens_go_out_with_premium_icons_but_buttons_stay_plain(client, actor, state):
-    """Telegram's rule, not a choice: button labels cannot carry entities."""
+async def test_screens_go_out_with_premium_text_and_button_icons(client, actor, state):
+    """Text emoji become inline custom emoji; a button's leading emoji becomes
+    its ``icon_custom_emoji_id``, drawn before the label."""
     from app.adminbot import handlers
 
-    premium_icons.set_map({"📡": "999000111"})
+    premium_icons.set_map({"📡": "999000111", "📣": "999000222"})
     await handlers.start(handlers_message("/start"), user_id=uuid.UUID(actor.id), state=state)
 
     text, markup = Sent.messages[-1]
     assert "tg://emoji?id=999000111" in text
     assert_valid_markdown_v2(text)
+
+    ads_buttons = [
+        b
+        for row in markup.inline_keyboard
+        for b in row
+        if (b.callback_data or "").startswith("nav:ads")
+    ]
+    assert ads_buttons, "the home screen offers Ads"
+    assert ads_buttons[0].icon_custom_emoji_id == "999000222"
+    assert not ads_buttons[0].text.startswith("📣"), "the icon replaces the emoji, not joins it"
     for row in markup.inline_keyboard:
         for button in row:
-            assert "tg://emoji" not in button.text, "button labels must stay plain"
+            assert "tg://emoji" not in button.text, "the token syntax never belongs in a label"
+
+
+def test_a_button_that_is_only_an_emoji_keeps_its_text():
+    """A button must keep visible text, so pager arrows stay as they are."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_map({"⬅️": "111"})
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️", callback_data="nav:ads:0")]]
+    )
+    out = premium_icons.apply_keyboard(markup)
+    assert out is markup, "nothing to change, same object back"
+
+
+def test_the_keyboard_transform_preserves_callbacks():
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_map({"📣": "222"})
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    out = premium_icons.apply_keyboard(markup)
+    button = out.inline_keyboard[0][0]
+    assert button.text == "Ads"
+    assert button.icon_custom_emoji_id == "222"
+    assert button.callback_data == "nav:ads:0"
+    # And the original screen object was not mutated in place.
+    assert markup.inline_keyboard[0][0].text == "📣 Ads"
 
 
 async def test_a_rejected_premium_message_falls_back_to_plain(client, actor, state):
@@ -118,21 +157,27 @@ async def test_a_rejected_premium_message_falls_back_to_plain(client, actor, sta
 
     premium_icons.set_map({"📡": "999000111"})
 
-    sent: list[str] = []
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    async def send(text: str) -> None:
-        sent.append(text)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📡 Panel", callback_data="nav:home")]]
+    )
+    sent: list[tuple[str, object]] = []
+
+    async def send(text: str, markup) -> None:
+        sent.append((text, markup))
         if "tg://emoji" in text:
             raise TelegramBadRequest(
                 method=SendMessage(chat_id=1, text=""),
                 message="Bad Request: can't parse entities: custom emoji",
             )
 
-    await handlers._deliver(send, "📡 *Panel*")
+    await handlers._deliver(send, "📡 *Panel*", keyboard)
 
     assert len(sent) == 2, "the premium attempt, then the plain retry"
-    assert "tg://emoji" in sent[0]
-    assert sent[1] == "📡 *Panel*"
+    assert "tg://emoji" in sent[0][0]
+    assert sent[0][1].inline_keyboard[0][0].icon_custom_emoji_id is not None
+    assert sent[1] == ("📡 *Panel*", keyboard), "the retry is the untouched original"
     assert premium_icons.suspended(), "and it stops trying until re-extracted"
 
 

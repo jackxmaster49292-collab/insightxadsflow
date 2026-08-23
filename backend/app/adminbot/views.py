@@ -305,10 +305,11 @@ def premium_icons_status(
         ]
     lines += [
         "",
-        "Two Telegram rules apply to every bot:",
-        "• *Buttons never change* — button labels cannot carry custom emoji\\.",
-        "• *Message icons render only if the bot owns a Fragment username*\\. "
-        "Without one, the panel quietly stays plain rather than breaking\\.",
+        "When do they actually render? Telegram's rule, for text and buttons "
+        "both: the bot owns a *Fragment username*, *or* the bot's owner has "
+        "*Telegram Premium* — the panel's own screens qualify for the second, "
+        "because the bot sends them directly\\. If Telegram refuses, the panel "
+        "quietly stays plain rather than breaking\\.",
     ]
     if not has_user_connection:
         lines += [

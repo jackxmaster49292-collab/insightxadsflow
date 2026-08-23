@@ -78,27 +78,32 @@ PICK_HINT_RULE = "Tap to select. Only chats this account can post in are listed.
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
-async def _deliver(send, text: str) -> None:  # type: ignore[no-untyped-def]
-    """Send ``text``, upgraded to premium icons when a map is loaded.
+async def _deliver(send, text: str, markup=None) -> None:  # type: ignore[no-untyped-def]
+    """Send ``text`` and ``markup``, upgraded to premium icons when mapped.
 
-    The upgrade is best-effort by design: if Telegram rejects the message —
-    which it will for any bot without a Fragment username, that being
-    Telegram's rule for custom emoji — the premium icons are suspended and the
-    plain text goes out instead. A degraded icon is a shrug; a blank panel is
-    an outage.
+    Both surfaces are upgraded at once: mapped emoji in the message text become
+    inline custom emoji, and a button whose label leads with a mapped emoji
+    gets ``icon_custom_emoji_id`` instead. Telegram allows both for a bot with
+    a Fragment username, or — for messages the bot sends directly, which every
+    panel screen is — when the bot's owner has Telegram Premium.
+
+    Best-effort by design: if Telegram rejects the upgraded message, premium
+    icons are suspended and the plain version goes out instead. A degraded
+    icon is a shrug; a blank panel is an outage.
     """
     styled = premium_icons.apply(text)
-    if styled == text:
-        await send(text)
+    styled_markup = premium_icons.apply_keyboard(markup)
+    if styled == text and styled_markup is markup:
+        await send(text, markup)
         return
     try:
-        await send(styled)
+        await send(styled, styled_markup)
     except TelegramBadRequest as exc:
         if "message is not modified" in str(exc):
             raise
         log.warning("premium_icons_rejected", error=str(exc))
         premium_icons.suspend()
-        await send(text)
+        await send(text, markup)
 
 
 async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None:
@@ -116,22 +121,19 @@ async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None
             if target.from_user and target.bot:
                 bot, chat_id = target.bot, target.from_user.id
 
-                async def send_fresh(text: str) -> None:
+                async def send_fresh(text: str, markup) -> None:  # type: ignore[no-untyped-def]
                     await bot.send_message(
-                        chat_id,
-                        text,
-                        reply_markup=screen.keyboard,
-                        parse_mode=PARSE_MODE,
+                        chat_id, text, reply_markup=markup, parse_mode=PARSE_MODE
                     )
 
-                await _deliver(send_fresh, screen.text)
+                await _deliver(send_fresh, screen.text, screen.keyboard)
             return
 
-        async def send_edit(text: str) -> None:
-            await message.edit_text(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+        async def send_edit(text: str, markup) -> None:  # type: ignore[no-untyped-def]
+            await message.edit_text(text, reply_markup=markup, parse_mode=PARSE_MODE)
 
         try:
-            await _deliver(send_edit, screen.text)
+            await _deliver(send_edit, screen.text, screen.keyboard)
         except TelegramBadRequest as exc:
             # Tapping Refresh twice produces an identical message; Telegram
             # rejects that edit and it is not an error worth surfacing.
@@ -139,26 +141,26 @@ async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None
                 raise
     else:
 
-        async def send_answer(text: str) -> None:
-            await target.answer(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+        async def send_answer(text: str, markup) -> None:  # type: ignore[no-untyped-def]
+            await target.answer(text, reply_markup=markup, parse_mode=PARSE_MODE)
 
-        await _deliver(send_answer, screen.text)
+        await _deliver(send_answer, screen.text, screen.keyboard)
 
 
 async def _ask(message: Message, text: str) -> None:
     """Prompt for the next step of a flow, as a fresh message."""
 
-    async def send(styled: str) -> None:
+    async def send(styled: str, _markup) -> None:  # type: ignore[no-untyped-def]
         await message.answer(styled, parse_mode=PARSE_MODE)
 
     await _deliver(send, text)
 
 
 async def _send(message: Message, screen: views.Screen) -> None:
-    async def send(text: str) -> None:
-        await message.answer(text, reply_markup=screen.keyboard, parse_mode=PARSE_MODE)
+    async def send(text: str, markup) -> None:  # type: ignore[no-untyped-def]
+        await message.answer(text, reply_markup=markup, parse_mode=PARSE_MODE)
 
-    await _deliver(send, screen.text)
+    await _deliver(send, screen.text, screen.keyboard)
 
 
 async def _home_screen(user_id: uuid.UUID, *, is_operator: bool = False) -> views.Screen:

@@ -220,14 +220,16 @@ What the reasons mean in practice:
 connected account — which custom emoji match each icon the panel draws, and
 stores their ids; nothing is hardcoded.
 
-Two Telegram rules apply to **every** bot, and no setting changes them:
+It upgrades both surfaces: emoji in screen text become inline custom emoji,
+and a button whose label leads with a mapped emoji gets Telegram's
+`icon_custom_emoji_id` — the icon drawn before the label (Bot API 10.2).
 
-* **Buttons never change.** Telegram button labels cannot carry custom emoji.
-* **Message icons render only if the bot owns a Fragment username.** Without
-  one Telegram rejects custom-emoji messages outright — so this panel quietly
-  falls back to plain icons rather than breaking, and the ✨ Icons screen says
-  that is what happened. Buy the bot a username on fragment.com and the same
-  extracted icons start rendering, no re-deploy needed — just extract again.
+When do they render? Telegram's rule, for text and buttons both: the bot owns
+a **Fragment username**, *or* the **bot's owner has Telegram Premium** and the
+message is sent directly by the bot — which every panel screen is, so a
+premium owner is enough here. If Telegram refuses anyway, the panel quietly
+falls back to plain icons rather than breaking, and the ✨ Icons screen says
+that is what happened; extract again after fixing the cause and it retries.
 
 ### Why it goes group by group
 

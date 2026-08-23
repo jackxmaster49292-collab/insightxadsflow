@@ -597,6 +597,26 @@ plain — with the reason stated on the ✨ Icons screen instead of left to be
 discovered. The MarkdownV2 checker learned the custom-emoji token; the fallback
 emoji embedded in each token is what renders anywhere the premium one cannot.
 
+### ADR-048 — Button icons too: Bot API 10.2 corrected ADR-047's premise
+**Context.** ADR-047 stated buttons can never carry custom emoji. The operator
+pushed back, and the installed Bot API 10.2 proves them right: 
+``InlineKeyboardButton`` (and ``KeyboardButton``) gained ``icon_custom_emoji_id``
+— an icon drawn before the label — usable by bots with a Fragment username *or*
+in messages the bot sends directly when the bot's **owner has Telegram
+Premium**. The panel's screens are exactly such messages. The old
+Fragment-only note on message entities is gone from the current API docs.
+**Decision.** The same central transform now upgrades keyboards: a button whose
+label leads with a mapped emoji gets the icon and loses the leading emoji from
+its text, so it is not drawn twice. A button whose label is *only* an emoji
+(the pager arrows) is left alone — a button must keep visible text. The
+transform copies buttons rather than mutating them, so cached Screen objects
+stay plain. The fallback resends both the original text **and** the original
+keyboard on rejection.
+**Consequence.** On this deployment the owner has Premium, so the panel's
+icons — text and buttons — should render premium with no Fragment purchase.
+Verification of a claim against the installed API, not against memory, is what
+settled this; memory said no and was out of date.
+
 ---
 
 ## Open tradeoffs

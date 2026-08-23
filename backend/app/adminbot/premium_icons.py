@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import threading
+from typing import Any
 
 _lock = threading.Lock()
 _map: dict[str, str] = {}
@@ -89,3 +90,53 @@ def apply(text: str) -> str:
 def strip(text: str) -> str:
     """Back to plain emoji — the exact inverse of :func:`apply`."""
     return _TOKEN.sub(r"\1", text)
+
+
+def apply_keyboard(markup: Any) -> Any:
+    """A copy of ``markup`` with each button's leading emoji as a premium icon.
+
+    Bot API 10.2 gave buttons ``icon_custom_emoji_id`` — an icon drawn *before*
+    the label. A button whose label starts with a mapped emoji gets the icon
+    and loses the leading emoji from its text, so it is not drawn twice. Works
+    per Telegram's rule when the bot owns a Fragment username **or** when the
+    bot's owner has Telegram Premium and the message is sent directly by the
+    bot — which is exactly what every panel screen is.
+
+    Returns the original object untouched when there is nothing to do, so the
+    send path can cheaply tell whether a fallback would even differ.
+    """
+    if markup is None or not enabled():
+        return markup
+    from aiogram.types import InlineKeyboardMarkup
+
+    with _lock:
+        mapping = dict(_map)
+
+    changed = False
+    rows = []
+    for row in markup.inline_keyboard:
+        buttons = []
+        for button in row:
+            emoticon = next(
+                (e for e in sorted(mapping, key=len, reverse=True) if button.text.startswith(e)),
+                None,
+            )
+            remainder = button.text[len(emoticon) :].strip() if emoticon else ""
+            if emoticon is None or not remainder:
+                # No mapped emoji, or nothing but the emoji: a button must keep
+                # visible text, so it stays exactly as designed.
+                buttons.append(button)
+                continue
+            changed = True
+            buttons.append(
+                button.model_copy(
+                    update={
+                        "text": remainder,
+                        "icon_custom_emoji_id": mapping[emoticon],
+                    }
+                )
+            )
+        rows.append(buttons)
+    if not changed:
+        return markup
+    return InlineKeyboardMarkup(inline_keyboard=rows)
