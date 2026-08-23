@@ -263,6 +263,11 @@ class TelegramConnection(Base, TimestampMixin):
     is_premium: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    #: When Telegram last told us the line above. NULL means never, and a
+    #: never-checked connection must not be reported as *not* premium — a
+    #: default is not a finding, and claiming one is how a Premium account got
+    #: told it was not.
+    premium_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: SHA-256 of the E.164 phone. The raw phone number is never stored.
     phone_hash: Mapped[str | None] = mapped_column(String(64))
 

@@ -1056,6 +1056,7 @@ async def ad_actions(
             session, user_id=user_id, connection_id=broadcast.connection_id
         )
         is_premium = bool(owner_connection and owner_connection.is_premium)
+        premium_checked = bool(owner_connection and owner_connection.premium_checked_at)
 
         if action == "confirm":
             await _render(
@@ -1065,6 +1066,7 @@ async def ad_actions(
                     target_count=len(target_ids),
                     estimate_s=estimate,
                     account_is_premium=is_premium,
+                    premium_checked=premium_checked,
                 ),
             )
             await query.answer()
@@ -1137,6 +1139,7 @@ async def ad_actions(
                 target_count=len(target_ids),
                 estimate_s=estimate,
                 account_is_premium=is_premium,
+                premium_checked=premium_checked,
             )
         else:
             screen = views.ad_detail(

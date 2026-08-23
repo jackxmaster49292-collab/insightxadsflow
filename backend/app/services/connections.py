@@ -255,6 +255,7 @@ async def _finalize_user(
     connection.telegram_account_id = state.account_id
     connection.telegram_username = state.username
     connection.is_premium = state.premium
+    connection.premium_checked_at = job_repo.now()
     connection.last_successful_check_at = job_repo.now()
     connection.last_health_check_at = job_repo.now()
     connection.last_error_code = None
@@ -268,6 +269,7 @@ async def run_health_check(session: AsyncSession, *, connection: TelegramConnect
     connection.last_health_check_at = job_repo.now()
     if report.healthy:
         connection.is_premium = report.premium
+        connection.premium_checked_at = job_repo.now()
         connection.last_successful_check_at = job_repo.now()
         connection.last_error_code = None
         connection.last_error_message_safe = None

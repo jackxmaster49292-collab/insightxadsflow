@@ -521,23 +521,64 @@ def ads_list(*, broadcasts: Sequence[Broadcast], page: int, can_create: bool) ->
     )
 
 
-def premium_emoji_warning(*, has_premium_emoji: bool, account_is_premium: bool) -> list[str]:
+def premium_emoji_warning(
+    *, has_premium_emoji: bool, account_is_premium: bool, checked: bool = True
+) -> list[str]:
     """Said before sending, not discovered afterwards.
 
     A custom emoji is an ordinary emoji character in the text plus an entity
     naming the premium one to draw. Telegram honours that entity only for a
     Telegram Premium account, so without it the ad arrives showing the fallback
     characters — which looks like a bug in this tool and is not one.
+
+    Three states, not two. ``checked=False`` means Telegram has never told us
+    either way, and a stored default is not a finding: reporting one as "not
+    Premium" is exactly how a Premium account came to be told it was not.
     """
-    if not has_premium_emoji or account_is_premium:
+    if not has_premium_emoji or (account_is_premium and checked):
         return []
+    if not checked:
+        return [
+            "",
+            "_This ad uses premium emoji\\. I have not checked yet whether this "
+            "account is Telegram Premium — tap *Check health* on the connection, "
+            "then reopen this ad\\._",
+        ]
     return [
         "",
-        "⚠️ *This ad uses premium emoji, and this account is not Telegram Premium\\.*",
+        "\u26a0\ufe0f *This ad uses premium emoji, and this account is not Telegram Premium\\.*",
         "",
         "_They will arrive as ordinary emoji\\. Subscribe on the posting "
         "account, or replace them — everything else posts exactly as written\\._",
     ]
+
+
+def formatting_summary(entities: Sequence[dict]) -> str:  # type: ignore[type-arg]
+    """What was captured from the message, in plain words.
+
+    The preview cannot show any of it — it is escaped plain text, and a bot may
+    not render a custom emoji at all — so this is the only way to confirm the
+    formatting survived without posting an ad and inspecting the result.
+    """
+    if not entities:
+        return ""
+
+    premium = sum(1 for e in entities if e.get("type") == "custom_emoji")
+    links = sum(1 for e in entities if e.get("type") in {"text_link", "url"})
+    styles = {
+        e.get("type")
+        for e in entities
+        if e.get("type") in {"bold", "italic", "underline", "strikethrough", "spoiler", "code"}
+    }
+
+    parts: list[str] = []
+    if styles:
+        parts.append(", ".join(sorted(str(s) for s in styles)))
+    if premium:
+        parts.append(f"{premium} premium emoji")
+    if links:
+        parts.append(f"{links} link" + ("s" if links > 1 else ""))
+    return escape(" \u00b7 ".join(parts)) if parts else ""
 
 
 def ad_compose(
@@ -546,6 +587,7 @@ def ad_compose(
     target_count: int,
     estimate_s: float,
     account_is_premium: bool = True,
+    premium_checked: bool = True,
 ) -> Screen:
     """The draft screen. Every field stays editable until Send is tapped."""
     has_media = broadcast.media_kind.value != "none"
@@ -557,14 +599,15 @@ def ad_compose(
         "*Message*",
         f"_{escape(body[:400])}_" if body else "_not written yet_",
     ]
-    if _has_premium_emoji(broadcast):
-        # The preview is plain text, and this bot could not render a custom
-        # emoji even if it tried — the Bot API reserves those for bots with a
-        # Fragment username. Saying so stops the preview reading as the result.
+    captured = formatting_summary(broadcast.body_entities or [])
+    if captured:
+        # The preview cannot show any of this — it is plain text, and a bot may
+        # not render a custom emoji at all. Naming what was captured is the only
+        # way to confirm it survived without posting an ad to find out.
         lines += [
             "",
-            "_The preview above is plain text, so premium emoji show as ordinary "
-            "ones here\\. The posted ad keeps them\\._",
+            f"*Formatting kept* — {captured}",
+            "_The preview above is plain text, so it cannot show them\\. The posted ad does\\._",
         ]
     if len(body) > 400:
         lines.append(f"_…and {len(body) - 400} more characters_")
@@ -581,6 +624,7 @@ def ad_compose(
     lines += premium_emoji_warning(
         has_premium_emoji=_has_premium_emoji(broadcast),
         account_is_premium=account_is_premium,
+        checked=premium_checked,
     )
 
     ready = bool(body or has_media) and target_count > 0
@@ -627,6 +671,7 @@ def ad_confirm(
     target_count: int,
     estimate_s: float,
     account_is_premium: bool = True,
+    premium_checked: bool = True,
 ) -> Screen:
     has_media = broadcast.media_kind.value != "none"
     preview = broadcast.body_text.strip()[:300] or "(image only)"
@@ -634,6 +679,7 @@ def ad_confirm(
         premium_emoji_warning(
             has_premium_emoji=_has_premium_emoji(broadcast),
             account_is_premium=account_is_premium,
+            checked=premium_checked,
         )
     )
     return Screen(

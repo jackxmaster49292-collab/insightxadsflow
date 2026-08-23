@@ -127,12 +127,22 @@ account**. Without Premium the ad arrives showing the ordinary characters.
 
 The panel checks the connected account and warns on the compose and confirm
 screens before you send, rather than leaving you to notice it across 157 posted
-ads.
+ads. If it has never checked — a connection made before this existed, for
+instance — it says that instead of assuming the worst; tap **Check health** on
+the connection and reopen the ad.
 
 **The preview inside this bot always shows ordinary emoji**, whatever your
 account has. The preview is plain text, and a bot cannot render a custom emoji
-at all — Telegram reserves those for bots with a Fragment username. Judge the
-result from a posted ad, not from the preview.
+at all — Telegram reserves those for bots with a Fragment username.
+
+So the compose screen tells you what it captured instead:
+
+```
+Formatting kept — bold, italic · 17 premium emoji · 1 link
+```
+
+That line is the confirmation that your formatting survived. Judge the result
+from it, or from a posted ad — never from the preview.
 
 The summary tells you how many groups, whether an image is attached, and roughly
 how long it will take. Once sending starts you can pause it — but messages

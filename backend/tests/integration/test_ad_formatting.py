@@ -378,12 +378,27 @@ async def test_composing_an_ad_stores_the_formatting_telegram_reported(client, a
 # --------------------------------------------------------------------------- #
 # Premium emoji need a premium account, and the panel says so first
 # --------------------------------------------------------------------------- #
+def test_an_unchecked_account_is_not_reported_as_non_premium():
+    """A stored default is not a finding. Reporting one as "not Premium" is
+    exactly how a Premium account came to be told it was not."""
+    from app.adminbot import views
+
+    text = "\n".join(
+        views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=False, checked=False)
+    )
+    assert "not Telegram Premium" not in text
+    assert "have not checked yet" in text
+    assert "Check health" in text, "it must say how to find out"
+
+
 def test_a_non_premium_account_is_warned_before_sending():
     """Custom emoji arrive as ordinary ones without Telegram Premium. Finding
     that out from 157 posted ads is the wrong way to learn it."""
     from app.adminbot import views
 
-    warning = views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=False)
+    warning = views.premium_emoji_warning(
+        has_premium_emoji=True, account_is_premium=False, checked=True
+    )
     text = "\n".join(warning)
 
     assert "not Telegram Premium" in text
@@ -396,7 +411,10 @@ def test_a_non_premium_account_is_warned_before_sending():
 def test_a_premium_account_is_not_warned():
     from app.adminbot import views
 
-    assert views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=True) == []
+    assert (
+        views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=True, checked=True)
+        == []
+    )
 
 
 def test_an_ad_without_premium_emoji_is_not_warned():
@@ -426,8 +444,38 @@ def test_the_compose_screen_explains_why_its_own_preview_looks_plain():
     screen = views.ad_compose(
         broadcast=broadcast, target_count=1, estimate_s=0, account_is_premium=True
     )
+    assert "Formatting kept" in screen.text
+    assert "1 premium emoji" in screen.text
     assert "preview above is plain text" in screen.text
-    assert "The posted ad keeps them" in screen.text
+    assert "The posted ad does" in screen.text
+
+
+def test_the_formatting_summary_names_what_was_captured():
+    """The preview cannot show formatting — it is plain text, and a bot may not
+    render a custom emoji at all — so this is the only confirmation available
+    without posting an ad and looking at it."""
+    from app.adminbot import views
+
+    summary = views.formatting_summary(
+        [
+            {"type": "bold", "offset": 0, "length": 5},
+            {"type": "italic", "offset": 6, "length": 3},
+            *[
+                {"type": "custom_emoji", "offset": i, "length": 2, "custom_emoji_id": "1"}
+                for i in range(17)
+            ],
+            {"type": "text_link", "offset": 99, "length": 4, "url": "https://x"},
+        ]
+    )
+    assert "17 premium emoji" in summary
+    assert "bold" in summary and "italic" in summary
+    assert "1 link" in summary
+
+
+def test_an_ad_with_no_formatting_has_no_summary():
+    from app.adminbot import views
+
+    assert views.formatting_summary([]) == ""
 
 
 async def test_the_premium_flag_is_read_from_telegram(client, actor, session):
@@ -444,6 +492,7 @@ async def test_the_premium_flag_is_read_from_telegram(client, actor, session):
     await connection_service.run_health_check(session, connection=connection)
 
     assert connection.is_premium is True
+    assert connection.premium_checked_at is not None, "and we know when we asked"
 
 
 # --------------------------------------------------------------------------- #
