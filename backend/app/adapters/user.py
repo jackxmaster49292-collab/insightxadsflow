@@ -441,7 +441,12 @@ class UserAdapter:
         sent = await self._client.send_message(
             await self._entity(destination),
             message=text,
-            formatting_entities=_to_mtproto_entities(entities) or None,
+            # Always a list, never None, and parse_mode off. Telethon reads
+            # `formatting_entities is None` as "parse this text as Markdown",
+            # so an ad with no formatting would have had its asterisks and
+            # underscores eaten as markup.
+            formatting_entities=_to_mtproto_entities(entities),
+            parse_mode=None,
         )
         return DeliveryReceipt(destination_message_id=int(sent.id))
 
@@ -468,7 +473,9 @@ class UserAdapter:
             await self._entity(destination),
             file=buffer,
             caption=caption or None,
-            formatting_entities=_to_mtproto_entities(caption_entities) or None,
+            # See send_text: an empty list must stay a list.
+            formatting_entities=_to_mtproto_entities(caption_entities),
+            parse_mode=None,
         )
         return DeliveryReceipt(destination_message_id=int(sent.id))
 

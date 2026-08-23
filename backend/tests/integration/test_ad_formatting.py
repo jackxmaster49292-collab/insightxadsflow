@@ -551,3 +551,55 @@ async def test_select_all_selects_every_page(client, actor, session):
 
     data = await state.get_data()
     assert len(data["selected"]) == 20, "every page, not just the visible eight"
+
+
+# --------------------------------------------------------------------------- #
+# Telethon must never re-parse the text
+# --------------------------------------------------------------------------- #
+def test_an_empty_entity_list_stays_a_list():
+    """Telethon reads ``formatting_entities is None`` as "parse this as
+    Markdown". An ad with no formatting but a literal asterisk would have had
+    it eaten as markup — and an ad written as `*not bold*` would have arrived
+    bold."""
+    import inspect
+
+    from app.adapters import user
+
+    for name in ("send_text", "send_photo"):
+        source = inspect.getsource(getattr(user.UserAdapter, name))
+        entity_line = next(line for line in source.splitlines() if "formatting_entities=" in line)
+        assert "or None" not in entity_line, (
+            f"{name} collapses an empty entity list to None, which makes "
+            f"Telethon parse the text as Markdown: {entity_line.strip()}"
+        )
+        assert "parse_mode=None" in source, f"{name} must disable parsing outright"
+
+
+def test_an_ad_with_no_formatting_still_disables_parsing(client, actor):
+    """The property behind the check above, stated as behaviour."""
+    from app.adapters.user import _to_mtproto_entities
+
+    assert _to_mtproto_entities([]) == [], "an empty list, not None"
+
+
+def test_the_compose_screen_says_when_nothing_was_captured():
+    """An absent line reads as "not applicable". A line saying none is what
+    answers "why are my premium emoji missing?"."""
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+
+    broadcast = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Old draft",
+        status=BroadcastStatus.draft,
+        body_text="INSIGHT STORE",
+        body_entities=[],
+        media_kind=SimpleNamespace(value="none"),
+        delay_ms=3000,
+        paused_reason_code=None,
+    )
+    screen = views.ad_compose(broadcast=broadcast, target_count=1, estimate_s=0)
+
+    assert "*Formatting kept* — none" in screen.text
+    assert "tap *Message* and send it again" in screen.text

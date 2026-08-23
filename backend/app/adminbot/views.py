@@ -609,6 +609,17 @@ def ad_compose(
             f"*Formatting kept* — {captured}",
             "_The preview above is plain text, so it cannot show them\\. The posted ad does\\._",
         ]
+    elif body:
+        # An absent line reads as "not applicable". A line saying none is what
+        # answers "why are my premium emoji missing?" — most often because the
+        # ad was written before the panel could keep formatting at all.
+        lines += [
+            "",
+            "*Formatting kept* — none",
+            "_If you sent bold text or premium emoji, tap *Message* and send it "
+            "again\\. An ad written before this panel kept formatting has none "
+            "stored\\._",
+        ]
     if len(body) > 400:
         lines.append(f"_…and {len(body) - 400} more characters_")
 

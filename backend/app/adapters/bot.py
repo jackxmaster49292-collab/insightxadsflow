@@ -317,7 +317,10 @@ class BotAdapter:
             sent = await self._bot.send_message(
                 chat_id=destination.peer_id,
                 text=text,
+                # Entities and parse_mode are mutually exclusive on the Bot API
+                # too; passing the text verbatim is the whole point.
                 entities=_to_bot_entities(entities) or None,
+                parse_mode=None,
             )
             return DeliveryReceipt(destination_message_id=int(sent.message_id))
         except TimeoutError as exc:
@@ -341,6 +344,7 @@ class BotAdapter:
                 photo=BufferedInputFile(photo, filename=filename),
                 caption=caption or None,
                 caption_entities=_to_bot_entities(caption_entities) or None,
+                parse_mode=None,
             )
             return DeliveryReceipt(destination_message_id=int(sent.message_id))
         except TimeoutError as exc:
