@@ -640,6 +640,48 @@ custom labels are plain text with no rejection risk, so they persist through
 the premium-icon fallback and only the icons ever degrade. The renameable list
 is append-only, because callbacks carry indexes into it.
 
+### ADR-050 — A batch must not be weighed against its own ceiling
+**Context.** An ad across 150 groups showed "1 leased · 145 pending": one group
+in flight at a time, whatever the settings said. The cause was in the claim
+path, not the configuration. ``claim_batch`` leases the whole batch first, and
+``in_flight_count`` then counted **those same rows** as in-flight, so the
+ceiling was measured against the very work being admitted. The first target
+already saw the batch at or over the limit, and admission collapsed towards
+one no matter how high the ceiling was raised. Forwarding had the identical
+defect.
+**Decision.** ``in_flight_count`` takes ``exclude_ids``; both claim paths pass
+the batch's own ids, so the baseline is *other* work only. Separately,
+broadcasts get their own ceiling (``broadcast_inflight``, 8) above the
+forwarding one, justified by the shape of the work: every target of a
+broadcast is a **different** group, so Telegram's per-group limit (20/min) can
+never bind and the connection-wide pacer (~30/s) is the real gate. The
+combined count is kept, so a connection doing both cannot run two budgets.
+**Consequence.** A 150-group round on Fast pacing (250 ms) finishes in under a
+minute instead of seven and a half. Nothing about limit-obedience changed: the
+pacer, every FloodWait, and the fail-closed pre-send check are untouched.
+Verified by restoring the bug — the concurrency test fails ``1 == 8``, which is
+the screenshot.
+
+### ADR-051 — Speed is a preset with its arithmetic shown, and a round reports itself
+**Context.** ``delay_ms`` is a number whose meaning only appears once
+multiplied by the group count — 3 s reads as harmless and is seven minutes
+across 150 groups. And a round that takes a minute or an hour ended silently:
+the outcome, which is the entire reason for running it, had to be discovered
+by opening a screen.
+**Decision.** ⚡ Speed offers Fast (250 ms) / Normal (3 s) / Careful (10 s),
+each button labelled with what it means *for this ad's group count*, plus
+Custom. ``min_broadcast_delay_ms`` (250 ms) is where the dial stops: below it
+the gain is seconds across a whole round and the risk is the customer's own
+account being read as a flood. When a round settles, an alert is pushed with
+delivered/total, how many missed it, and where to look — deduped by round
+number, so a repeating ad reports once per round and a re-settle cannot
+double-send.
+**Consequence.** The screen states the honest ceiling rather than implying
+simultaneity: one account over one connection sends one message after another,
+several in the air at once, ~4/s on Fast — an order of magnitude under
+Telegram's documented rate. Counts are taken before ``reopen_for_repeat``,
+which is the only moment a round's outcome exists in full.
+
 ---
 
 ## Open tradeoffs

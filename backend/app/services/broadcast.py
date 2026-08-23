@@ -400,6 +400,11 @@ async def settle(session: AsyncSession, *, broadcast: Broadcast) -> bool:
         return False
 
     broadcast.repeat_count += 1
+    # Counted *before* the reopen below, which resets every target: after it
+    # there is nothing left to count, and this is the one moment the round's
+    # outcome exists in full.
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    await _report_round(session, broadcast=broadcast, counts=counts)
 
     if broadcast.repeat_every_s:
         # The gap is measured from the round *finishing*, not from when it
@@ -420,6 +425,47 @@ async def settle(session: AsyncSession, *, broadcast: Broadcast) -> bool:
     broadcast.completed_at = datetime.now(UTC)
     broadcast.next_run_at = None
     return True
+
+
+async def _report_round(
+    session: AsyncSession, *, broadcast: Broadcast, counts: dict[str, int]
+) -> None:
+    """Push the round's result, so nobody has to sit watching a screen.
+
+    A round can take a minute or an hour, and the outcome is the whole reason
+    for running it. Reporting it unprompted is the difference between a tool
+    that ran and a tool that told you what it did. The dedupe key carries the
+    round number, so a repeating ad reports once per round rather than once
+    ever, and a retried settle cannot double-send.
+    """
+    from app.repositories import admins as admin_repo
+
+    delivered = counts.get("succeeded", 0)
+    missed = sum(
+        counts.get(status, 0) for status in ("skipped", "failed", "dead_letter", "needs_attention")
+    )
+    total = delivered + missed
+    if not total:
+        return
+
+    round_label = f" (round {broadcast.repeat_count})" if broadcast.repeat_every_s else ""
+    body = f"{delivered} of {total} groups received it."
+    if missed:
+        body += f"\n\n{missed} did not. Open the ad and tap Groups to see which ones and why."
+        if broadcast.repeat_every_s:
+            body += " The next round tries them all again."
+    else:
+        body += "\n\nNo failures."
+
+    await admin_repo.notify(
+        session,
+        user_id=broadcast.user_id,
+        kind="broadcast_round_finished",
+        title=f"{broadcast.name}{round_label} finished",
+        body=body,
+        dedupe_key=f"broadcast_round:{broadcast.id}:{broadcast.repeat_count}",
+        connection_id=broadcast.connection_id,
+    )
 
 
 async def _load_chat(session: AsyncSession, chat_id: uuid.UUID) -> TelegramChat | None:

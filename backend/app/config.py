@@ -91,8 +91,17 @@ class Settings(BaseSettings):
     telegram_api_hash: str | None = None
 
     # --- Operational safety controls (not monetization limits) --------------
-    worker_concurrency: int = 8
+    worker_concurrency: int = 16
     per_connection_inflight: int = 2
+    #: How many groups of one broadcast may be in flight on one connection.
+    #:
+    #: Higher than ``per_connection_inflight`` on purpose, and the reason is the
+    #: shape of the work rather than a wish to go faster: a forwarding job may
+    #: hammer one destination, while every target of a broadcast is a *different*
+    #: group. The per-group ceiling (20/min) is therefore never the binding
+    #: constraint here — the connection-wide one is, and the pacer enforces that
+    #: unchanged at ~30/s. Every Telegram flood wait is still obeyed in full.
+    broadcast_inflight: int = 8
     album_buffer_ms: int = 2000
     bot_poll_timeout_s: int = 25
     safety_pause_threshold: int = 5
@@ -119,6 +128,12 @@ class Settings(BaseSettings):
     #: documents ~20 messages per minute to the same group and ~30 messages per
     #: second overall; 3s keeps a single broadcast well inside both.
     broadcast_default_delay_ms: int = 3_000
+    #: The floor an operator may lower the pacing to. 150 different groups at
+    #: 250 ms is 4 messages a second — an order of magnitude under Telegram's
+    #: documented ~30/s, and fast enough that a round finishes in under a
+    #: minute. Below this the gain is seconds and the risk is the customer's
+    #: own account being read as a flood, so it is where the dial stops.
+    min_broadcast_delay_ms: int = 250
     #: Longest message body a broadcast may carry. Telegram rejects a text
     #: message over 4096 characters, and a caption over 1024.
     max_broadcast_text_len: int = 4_096

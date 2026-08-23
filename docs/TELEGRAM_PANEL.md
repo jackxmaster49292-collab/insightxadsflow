@@ -246,14 +246,32 @@ one, send the new text (up to 32 characters, one line), and it changes
 everywhere that button appears — stored in the database, surviving restarts.
 Send `-` while renaming to go back to the built-in label.
 
-### Why it goes group by group
+### Speed
 
-Posting pauses between groups — 3 seconds by default, changeable with **⏱
-Pause**. That stop-and-go rhythm is deliberate: Telegram allows roughly twenty
-messages per minute into a group and watches the overall rate, and an account
-that blasts hundreds of groups in one burst is an account that gets restricted.
-Groups with slow mode add their own waits, which are obeyed exactly. 158 groups
-at 3 seconds is about 8 minutes for the round.
+**⚡ Speed** on the compose screen sets how fast a round works through the
+groups, and each preset says what it means for *your* group count:
+
+| | between groups | 150 groups |
+|---|---|---|
+| ⚡ Fast | 0.25 s | under a minute |
+| 🚶 Normal | 3 s | about 7 minutes |
+| 🐢 Careful | 10 s | about 25 minutes |
+
+**Custom** takes any value from 0.25 s upward.
+
+They cannot go out *truly* at once: it is one account over one connection, so
+messages leave one after another — but on Fast several are in the air together.
+Fast is roughly 4 messages a second, an order of magnitude below Telegram's
+documented rate. That is where the dial stops, because going faster buys
+seconds across the whole round and risks **your** account being read as a
+flood. Every wait Telegram asks for is still obeyed in full, and a group with
+slow mode adds its own.
+
+### You get told how it went
+
+When a round finishes the bot messages you by itself: how many of the groups
+received it, how many did not, and where to look. You do not have to sit
+watching the screen. A repeating ad reports once per round.
 
 While it is sending, the ad's screen shows progress, per-group outcomes, and a
 **Retry** button for groups that did not receive it. Retry never re-posts to a

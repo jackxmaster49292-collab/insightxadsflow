@@ -1023,8 +1023,15 @@ async def ad_delay(message: Message, user_id: uuid.UUID, state: FSMContext, **_e
     except ValueError:
         await _ask(message, "Send a number of seconds, like `3`\\.")
         return
-    if not 0 <= seconds <= 3600:
-        await _ask(message, "Use a value between 0 and 3600 seconds\\.")
+    floor_ms = get_settings().min_broadcast_delay_ms
+    if not floor_ms / 1000 <= seconds <= 3600:
+        await _ask(
+            message,
+            f"Use a value between {views.escape(f'{floor_ms / 1000:g}')} and "
+            "3600 seconds\\.\n\n"
+            "Below that the gain is a few seconds across the whole round, and "
+            "the risk is *your* account being read as a flood\\.",
+        )
         return
 
     data = await state.get_data()
@@ -1259,6 +1266,47 @@ async def ad_actions(
                 ),
             )
             await query.answer("Paused while you edit.")
+            return
+
+        if action == "speed":
+            await _render(query, views.ad_speed(broadcast=broadcast, target_count=len(target_ids)))
+            await query.answer()
+            return
+
+        if action == "spd":
+            parts = (query.data or "").split(":")
+            index = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else -1
+            if not 0 <= index < len(views.SPEED_PRESETS):
+                await query.answer("Unknown speed.", show_alert=True)
+                return
+            label, broadcast.delay_ms = views.SPEED_PRESETS[index]
+            await _render(
+                query,
+                views.ad_compose(
+                    broadcast=broadcast,
+                    target_count=len(target_ids),
+                    estimate_s=broadcast_service.estimated_duration_s(
+                        broadcast.delay_ms, len(target_ids)
+                    ),
+                    account_is_premium=is_premium,
+                    premium_checked=premium_checked,
+                ),
+            )
+            await query.answer(label.split(" ", 1)[-1])
+            return
+
+        if action == "back":
+            await _render(
+                query,
+                views.ad_compose(
+                    broadcast=broadcast,
+                    target_count=len(target_ids),
+                    estimate_s=estimate,
+                    account_is_premium=is_premium,
+                    premium_checked=premium_checked,
+                ),
+            )
+            await query.answer()
             return
 
         if action == "groups":

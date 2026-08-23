@@ -21,9 +21,6 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message
 from aiogram.types import User as TgUser
 from sqlalchemy import select
@@ -215,14 +212,6 @@ def a_callback(data: str) -> BotCallback:
         chat_instance="ci",
         data=data,
         message=a_message(),
-    )
-
-
-@pytest.fixture
-def state() -> FSMContext:
-    return FSMContext(
-        storage=MemoryStorage(),
-        key=StorageKey(bot_id=1, chat_id=ADMIN_CHAT, user_id=ADMIN_CHAT),
     )
 
 

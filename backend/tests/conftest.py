@@ -174,6 +174,25 @@ async def other_actor(app) -> AsyncIterator[Actor]:
 # --------------------------------------------------------------------------- #
 # Mock Telegram helpers
 # --------------------------------------------------------------------------- #
+@pytest.fixture
+def state():
+    """A fresh conversation state for driving a bot flow directly.
+
+    In conftest rather than in one test module, because three files now need
+    it and the third copy is where they start to differ.
+    """
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from tests.integration.test_bot_flows import ADMIN_CHAT
+
+    return FSMContext(
+        storage=MemoryStorage(),
+        key=StorageKey(bot_id=1, chat_id=ADMIN_CHAT, user_id=ADMIN_CHAT),
+    )
+
+
 def fake_broadcast(**overrides):
     """A stand-in for a Broadcast row, for testing screens without a database.
 

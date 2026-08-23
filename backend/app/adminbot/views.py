@@ -778,6 +778,72 @@ def formatting_summary(entities: Sequence[dict]) -> str:  # type: ignore[type-ar
     return escape(" \u00b7 ".join(parts)) if parts else ""
 
 
+#: Pacing presets, in milliseconds between two group deliveries. Indexed by
+#: the callback, so this tuple is append-only.
+SPEED_PRESETS: tuple[tuple[str, int], ...] = (
+    ("⚡ Fast", 250),
+    ("🚶 Normal", 3_000),
+    ("🐢 Careful", 10_000),
+)
+
+
+def ad_speed(*, broadcast: Broadcast, target_count: int) -> Screen:
+    """How fast to work through the groups, with the arithmetic shown.
+
+    Presets rather than a bare number, because the number only means something
+    once multiplied by the group count — and that multiplication is what
+    decides whether a round takes forty seconds or half an hour.
+    """
+    current_round = estimated_round_s(broadcast.delay_ms, target_count)
+    now_line = f"*Now* — {seconds_label(broadcast.delay_ms)} between groups"
+    if target_count:
+        now_line += f", about {escape(humanize(current_round))} a round"
+
+    lines = ["⚡ *Speed*", "", f"*Groups* — {target_count}", now_line, ""]
+    rows = []
+    for index, (label, delay_ms) in enumerate(SPEED_PRESETS):
+        estimate = estimated_round_s(delay_ms, target_count)
+        suffix = f" — {humanize(estimate)}" if target_count else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{label}{suffix}",
+                    callback_data=f"ad:{broadcast.id}:spd:{index}",
+                )
+            ]
+        )
+
+    lines += [
+        "They all go out from *one* account over *one* connection, so they "
+        "leave one after another rather than truly at once — but on *Fast* "
+        "several are in the air together and 150 groups finish in well under "
+        "a minute\\.",
+        "",
+        "Fast is roughly 4 messages a second, an order of magnitude under "
+        "Telegram's documented rate\\. Going faster than this would buy "
+        "seconds and risk *your* account being read as a flood, so the dial "
+        "stops here\\. Every wait Telegram asks for is still obeyed in full\\.",
+    ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *rows,
+            [InlineKeyboardButton(text="✏️ Custom", callback_data=f"ad:{broadcast.id}:delay")],
+            _back(f"ad:{broadcast.id}:back"),
+        ),
+    )
+
+
+def estimated_round_s(delay_ms: int, target_count: int) -> float:
+    """How long one pass over the groups takes.
+
+    The same arithmetic the scheduler uses, so the number on screen is the
+    number that happens.
+    """
+    return (delay_ms / 1000) * max(0, target_count - 1)
+
+
 def ad_compose(
     *,
     broadcast: Broadcast,
@@ -868,7 +934,7 @@ def ad_compose(
             [InlineKeyboardButton(text="✏️ Message", callback_data=f"ad:{broadcast.id}:text")],
             [
                 InlineKeyboardButton(text="🖼 Image", callback_data=f"ad:{broadcast.id}:media"),
-                InlineKeyboardButton(text="⏱ Pause", callback_data=f"ad:{broadcast.id}:delay"),
+                InlineKeyboardButton(text="⚡ Speed", callback_data=f"ad:{broadcast.id}:speed"),
             ],
             [InlineKeyboardButton(text="🔁 Repeat", callback_data=f"ad:{broadcast.id}:repeat")],
             [

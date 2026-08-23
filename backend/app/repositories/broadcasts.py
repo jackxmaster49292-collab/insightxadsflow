@@ -485,11 +485,27 @@ async def requeue_failed(session: AsyncSession, *, broadcast_id: uuid.UUID) -> i
     return len(result.all())
 
 
-async def in_flight_count(session: AsyncSession, *, connection_id: uuid.UUID) -> int:
-    result = await session.execute(
+async def in_flight_count(
+    session: AsyncSession,
+    *,
+    connection_id: uuid.UUID,
+    exclude_ids: Sequence[uuid.UUID] = (),
+) -> int:
+    """Leased work on this connection, optionally ignoring a set of ids.
+
+    ``exclude_ids`` exists because the caller has *already* leased the batch it
+    is about to weigh: counting those rows would measure the ceiling against
+    the very work being admitted, and the admitted count would collapse towards
+    one no matter how high the ceiling. That is exactly what "1 leased · 145
+    pending" looked like from the outside.
+    """
+    query = (
         select(func.count())
         .select_from(BroadcastTarget)
         .join(Broadcast, Broadcast.id == BroadcastTarget.broadcast_id)
         .where(Broadcast.connection_id == connection_id, BroadcastTarget.status == JobStatus.leased)
     )
+    if exclude_ids:
+        query = query.where(BroadcastTarget.id.notin_(exclude_ids))
+    result = await session.execute(query)
     return int(result.scalar_one())

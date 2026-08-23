@@ -16,7 +16,6 @@ from app.adminbot import premium_icons, views
 from app.repositories import panel_emoji as panel_emoji_repo
 from tests.conftest import connect_bot, script_for
 from tests.integration.test_bot_flows import (
-    ADMIN_CHAT,
     Sent,
     a_callback,
     assert_valid_markdown_v2,
@@ -34,18 +33,6 @@ def _plain_icons():
     yield
     premium_icons.set_map({})
     premium_icons.set_labels({})
-
-
-@pytest.fixture
-def state():
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
-    from aiogram.fsm.storage.memory import MemoryStorage
-
-    return FSMContext(
-        storage=MemoryStorage(),
-        key=StorageKey(bot_id=1, chat_id=ADMIN_CHAT, user_id=ADMIN_CHAT),
-    )
 
 
 # --------------------------------------------------------------------------- #

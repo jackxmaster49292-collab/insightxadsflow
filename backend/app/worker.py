@@ -371,12 +371,18 @@ async def _claim_within_limits(session, capacity: int) -> list[ForwardingJob]:  
     if not jobs:
         return []
 
+    # The batch's own rows are already leased, so they are excluded from the
+    # baseline: measuring the ceiling against the work being admitted is what
+    # collapsed throughput to one item at a time.
+    batch_ids = [job.id for job in jobs]
     accepted: list[ForwardingJob] = []
     per_connection: dict[uuid.UUID, int] = {}
     for job in jobs:
         in_flight = per_connection.get(job.connection_id)
         if in_flight is None:
-            in_flight = await job_repo.in_flight_count(session, connection_id=job.connection_id)
+            in_flight = await job_repo.in_flight_count(
+                session, connection_id=job.connection_id, exclude_ids=batch_ids
+            )
         if in_flight >= settings.per_connection_inflight:
             # Backpressure: release the lease rather than hold one we will not act on.
             job.status = JobStatus.pending
@@ -389,11 +395,15 @@ async def _claim_within_limits(session, capacity: int) -> list[ForwardingJob]:  
 
 
 async def _claim_broadcasts_within_limits(session, capacity: int) -> list[BroadcastTarget]:  # type: ignore[no-untyped-def]
-    """Claim broadcast targets, respecting the same per-connection in-flight cap.
+    """Claim broadcast targets, respecting the broadcast in-flight cap.
 
-    The cap counts forwarding jobs *and* broadcast targets together. Counting
-    them separately would let one connection run twice its budget simply by
-    doing both at once, which is what the limit exists to prevent.
+    The count still includes forwarding jobs *and* broadcast targets together:
+    counting them separately would let one connection run two budgets at once
+    by doing both, which is what a shared ceiling exists to prevent. What
+    differs is the ceiling itself — ``broadcast_inflight`` rather than
+    ``per_connection_inflight`` — because every target of a broadcast is a
+    different group, so the per-group limit never binds and the connection-wide
+    pacer is the real gate. Forwarding keeps its lower ceiling.
     """
     settings = get_settings()
     targets = await broadcast_repo.claim_batch(
@@ -407,6 +417,7 @@ async def _claim_broadcasts_within_limits(session, capacity: int) -> list[Broadc
     connection_of: dict[uuid.UUID, uuid.UUID] = {}
     accepted: list[BroadcastTarget] = []
     per_connection: dict[uuid.UUID, int] = {}
+    batch_ids = [target.id for target in targets]
 
     for target in targets:
         connection_id = connection_of.get(target.broadcast_id)
@@ -424,8 +435,10 @@ async def _claim_broadcasts_within_limits(session, capacity: int) -> list[Broadc
         if in_flight is None:
             in_flight = await job_repo.in_flight_count(
                 session, connection_id=connection_id
-            ) + await broadcast_repo.in_flight_count(session, connection_id=connection_id)
-        if in_flight >= settings.per_connection_inflight:
+            ) + await broadcast_repo.in_flight_count(
+                session, connection_id=connection_id, exclude_ids=batch_ids
+            )
+        if in_flight >= settings.broadcast_inflight:
             # Backpressure: release the lease rather than hold one we will not act on.
             target.status = JobStatus.pending
             target.lease_owner = None

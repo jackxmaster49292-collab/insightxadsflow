@@ -1094,3 +1094,166 @@ async def test_a_hostile_group_title_cannot_break_the_report(client, actor, sess
         page=0,
     )
     assert_valid_markdown_v2(screen.text)
+
+
+# --------------------------------------------------------------------------- #
+# Speed: how long a round actually takes
+# --------------------------------------------------------------------------- #
+async def test_fast_pacing_schedules_a_large_round_in_under_a_minute(client, actor, session):
+    """150 groups at the old 3s default is 7.5 minutes of stagger before the
+    worker even gets to the tail. Fast is the same machinery, paced for the
+    fact that every target is a *different* group."""
+    from app.adminbot import views
+
+    fast_ms = dict(views.SPEED_PRESETS)["⚡ Fast"]
+    ctx = await build_broadcast(actor, session, groups=150, delay_ms=fast_ms)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    spread = (targets[-1].not_before - targets[0].not_before).total_seconds()
+    expected = broadcast_service.estimated_duration_s(fast_ms, len(targets))
+    assert spread == pytest.approx(expected, abs=0.1), "the estimate is what happens"
+    assert spread > 0, "still paced — not one instantaneous burst"
+    # The number that matters to the customer: a full 150-group round.
+    assert broadcast_service.estimated_duration_s(fast_ms, 150) < 60
+
+
+async def test_many_groups_are_in_flight_at_once(client, actor, session):
+    """The screenshot showed "1 leased · 145 pending": one group at a time.
+    The ceiling for broadcasts is higher because their targets never share a
+    group, so the per-group limit cannot bind."""
+    from app.worker import _claim_broadcasts_within_limits
+
+    settings = get_settings()
+    ctx = await build_broadcast(actor, session, groups=20, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    claimed = await _claim_broadcasts_within_limits(session, 50)
+    assert len(claimed) == settings.broadcast_inflight
+    assert settings.broadcast_inflight > settings.per_connection_inflight
+
+
+async def test_the_speed_screen_shows_the_arithmetic(client, actor, session):
+    from app.adminbot import views
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=3000)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    screen = views.ad_speed(broadcast=broadcast, target_count=150)
+
+    labels = [b.text for row in screen.keyboard.inline_keyboard for b in row]
+    assert any("Fast" in label for label in labels)
+    # Every preset states what it means for *this* group count.
+    fast = next(label for label in labels if "Fast" in label)
+    assert "seconds" in fast, f"the preset must say how long a round takes: {fast}"
+
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+
+async def test_a_pause_below_the_floor_is_refused(client, actor, state, session):
+    """The dial stops where the gain is seconds and the risk is an account."""
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    ctx = await build_broadcast(actor, session, groups=2)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    before = broadcast.delay_ms
+
+    await handlers.ad_actions(
+        a_callback(f"ad:{broadcast.id}:delay"), user_id=uuid.UUID(actor.id), state=state
+    )
+    await handlers.ad_delay(a_message("0"), user_id=uuid.UUID(actor.id), state=state)
+
+    await session.refresh(broadcast)
+    assert broadcast.delay_ms == before, "unchanged"
+
+
+# --------------------------------------------------------------------------- #
+# Reporting the round
+# --------------------------------------------------------------------------- #
+async def test_a_finished_round_reports_itself(client, actor, session):
+    """A round can take a minute or an hour. Being told the outcome is the
+    difference between a tool that ran and one that told you what it did."""
+    from app.db.models import AdminNotification
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    from app.adapters.base import AccessReport as _AccessReport
+    from app.db.models import TelegramChat
+    from app.repositories import chats as chat_repo
+
+    blocked = chat_repo.to_ref(await session.get(TelegramChat, ctx["chat_ids"][1]))
+    script_for(ctx["connection_id"]).destination_allowed[blocked.key] = _AccessReport(
+        allowed=False, reason_code=reasons.WRITE_FORBIDDEN
+    )
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    alert = (
+        (
+            await session.execute(
+                select(AdminNotification).where(
+                    AdminNotification.kind == "broadcast_round_finished"
+                )
+            )
+        )
+        .scalars()
+        .one()
+    )
+    assert "2 of 3 groups received it" in alert.body
+    assert "1 did not" in alert.body
+    assert "Groups" in alert.body, "and where to look"
+
+
+async def test_each_repeat_round_reports_once(client, actor, session):
+    """Dedupe by round number: once per round, never twice, never only once."""
+    from app.db.models import AdminNotification
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+    # A second settle of the same round must not produce a second alert.
+    await broadcast_service.settle(session, broadcast=broadcast)
+    await session.commit()
+
+    alerts = (
+        (
+            await session.execute(
+                select(AdminNotification).where(
+                    AdminNotification.kind == "broadcast_round_finished"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(alerts) == 1
+    assert "round 1" in alerts[0].title
