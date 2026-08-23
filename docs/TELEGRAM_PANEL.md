@@ -259,6 +259,17 @@ groups, and each preset says what it means for *your* group count:
 
 **Custom** takes any value from 0.25 s upward.
 
+At the 500-group ceiling on Fast the round schedules across about **2 minutes**
+— measured, not estimated: `test_an_ad_reaches_five_hundred_groups_once_each`
+runs a real 500-group ad and checks every group is addressed exactly once.
+
+If you have **more than 500 groups**, one ad will not take them all: the panel
+refuses with the count and asks you to split it. Either make two ads, or raise
+`MAX_BROADCAST_TARGETS` in `.env` and redeploy. The limit is an operational
+bound on how much one tap can set in motion, not a licence restriction — but
+raising it raises how much a single mistake sends, so it is a deliberate
+change.
+
 They cannot go out *truly* at once: it is one account over one connection, so
 messages leave one after another — but on Fast several are in the air together.
 Fast is roughly 4 messages a second, an order of magnitude below Telegram's

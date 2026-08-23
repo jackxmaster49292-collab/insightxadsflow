@@ -16,7 +16,7 @@ from app.adapters.base import ChatRef, DiscoveredChat, InboundMessage, MediaType
 from app.config import get_settings
 from app.db.models import ForwardingJob, JobStatus
 from app.services.dispatch import dispatch_inbound
-from tests.conftest import Actor, connect_bot, script_for, sync_with_chats
+from tests.conftest import Actor, connect_bot, discovered, script_for, sync_with_chats
 from tests.integration.test_forwarding import run_job
 
 SOURCE_PEER = -1002_000_000
@@ -327,3 +327,127 @@ async def test_a_delay_that_would_take_days_is_refused(client, actor):
     body = response.json()["error"]
     assert body["code"] == "delay_spread_too_long"
     assert "hours to finish delivering" in body["message"]
+
+
+# --------------------------------------------------------------------------- #
+# An ad at the ceiling: 500 groups
+# --------------------------------------------------------------------------- #
+async def test_an_ad_reaches_five_hundred_groups_once_each(client, actor, session):
+    """ "What if it is 500?" answered by running it: every group receives the ad
+    exactly once, the schedule is what the Speed screen promised, and the
+    round settles itself."""
+    from app.adminbot import views
+    from app.db.models import BroadcastStatus, BroadcastTarget
+    from app.repositories import broadcasts as broadcast_repo
+    from app.services import broadcast as broadcast_service
+    from tests.integration.test_broadcast import drain
+
+    settings = get_settings()
+    total = settings.max_broadcast_targets
+    fast_ms = dict(views.SPEED_PRESETS)["⚡ Fast"]
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            discovered(-1003_000_000 - i, f"Group {i:03d}", chat_kind="supergroup")
+            for i in range(total)
+        ],
+    )
+    chats = await fetch_all_chats(actor)
+    assert len(chats) == total
+
+    broadcast = await broadcast_repo.create(
+        session,
+        user_id=uuid.UUID(actor.id),
+        connection_id=uuid.UUID(connection_id),
+        name="Everywhere",
+        delay_ms=fast_ms,
+    )
+    broadcast.body_text = "INSIGHT STORE — premium tools"
+    await broadcast_repo.replace_targets(
+        session, broadcast=broadcast, chat_ids=[uuid.UUID(c["id"]) for c in chats]
+    )
+    await session.commit()
+
+    queued = await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    assert queued == total
+
+    # The schedule the customer was shown, before anything is sent.
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    spread = (targets[-1].not_before - targets[0].not_before).total_seconds()
+    assert spread < 180, f"500 groups on Fast should schedule inside 3 minutes, got {spread:.0f}s"
+
+    started = time.perf_counter()
+    await drain(session, broadcast.id)
+    elapsed = time.perf_counter() - started
+
+    script = script_for(connection_id)
+    sends = script.calls_to("send_text")
+    assert len(sends) == total, "every group, exactly once"
+    addressed = {call.args[0].key for call in sends}
+    assert len(addressed) == total, "no group addressed twice"
+
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.completed
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    assert counts == {"succeeded": total}
+    print(f"\n500 groups: scheduled across {spread:.0f}s, executed in {elapsed:.1f}s")
+
+
+async def test_the_group_report_pages_through_five_hundred(client, actor, session):
+    """50 pages, and every one of them has to be a message Telegram accepts."""
+    from app.adminbot import views
+    from app.repositories import broadcasts as broadcast_repo
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    settings = get_settings()
+    total = settings.max_broadcast_targets
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            # Titles full of MarkdownV2 specials, on every page.
+            discovered(-1004_000_000 - i, f"Group_{i:03d} *[!]* (x.y)", chat_kind="supergroup")
+            for i in range(total)
+        ],
+    )
+    chats = await fetch_all_chats(actor)
+    broadcast = await broadcast_repo.create(
+        session,
+        user_id=uuid.UUID(actor.id),
+        connection_id=uuid.UUID(connection_id),
+        name="Everywhere",
+        delay_ms=250,
+    )
+    await broadcast_repo.replace_targets(
+        session, broadcast=broadcast, chat_ids=[uuid.UUID(c["id"]) for c in chats]
+    )
+    await session.commit()
+
+    rows = await broadcast_repo.targets_with_chats(session, broadcast_id=broadcast.id)
+    assert len(rows) == total
+
+    pages = -(-total // views.REPORT_PAGE_SIZE)
+    for page in range(pages):
+        screen = views.ad_group_report(broadcast=broadcast, rows=rows, page=page)
+        assert len(screen.text) <= 4096, f"page {page} is {len(screen.text)} characters"
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
