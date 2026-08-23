@@ -732,3 +732,160 @@ def test_the_repeat_button_fits_telegram_s_callback_limit():
         for row in screen.keyboard.inline_keyboard
         for button in row
     )
+
+
+# --------------------------------------------------------------------------- #
+# Saying what actually happened
+# --------------------------------------------------------------------------- #
+def test_an_ad_nobody_received_is_not_a_green_tick():
+    """`completed` means the round ran out of work, not that anyone got it. An
+    ad whose only group refused it showed the same ✅ as one that reached 500."""
+    from app.adminbot import views
+
+    nothing_arrived = fake_broadcast(status=BroadcastStatus.completed)
+    assert views.delivery_icon(nothing_arrived, {"skipped": 1}) == "⚠️"
+    assert views.delivery_icon(nothing_arrived, {"succeeded": 1}) == "✅"
+
+
+def test_the_detail_screen_names_how_many_missed_it():
+    from app.adminbot import views
+
+    text = views.ad_detail(
+        broadcast=fake_broadcast(status=BroadcastStatus.completed),
+        counts={"succeeded": 3, "skipped": 2},
+        target_count=5,
+    ).text
+
+    assert "2 of 5 did not receive it" in text
+    assert "Events" in text
+
+
+def test_a_fully_delivered_ad_says_nothing_extra():
+    """A warning on every screen is a warning nobody reads."""
+    from app.adminbot import views
+
+    text = views.ad_detail(
+        broadcast=fake_broadcast(status=BroadcastStatus.completed),
+        counts={"succeeded": 5},
+        target_count=5,
+    ).text
+    assert "did not receive it" not in text
+
+
+def test_the_ads_list_shows_what_arrived():
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_keyboard_is_sendable
+
+    a = fake_broadcast(name="Reached nobody", status=BroadcastStatus.completed)
+    b = fake_broadcast(name="Reached everyone", status=BroadcastStatus.completed)
+    screen = views.ads_list(
+        broadcasts=[a, b],
+        page=0,
+        can_create=True,
+        counts_by_id={a.id: {"skipped": 4}, b.id: {"succeeded": 4}},
+    )
+    labels = [btn.text for row in screen.keyboard.inline_keyboard for btn in row]
+    assert any(label.startswith("⚠️") and "0/4" in label for label in labels)
+    assert any(label.startswith("✅") and "4/4" in label for label in labels)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+
+def test_the_activity_screen_names_the_group():
+    """Twelve identical "not allowed to post" lines say something is wrong but
+    not which group to go and fix."""
+    import uuid as _uuid
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+    from app.domain import reasons
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    chat_id = _uuid.uuid4()
+    event = SimpleNamespace(
+        occurred_at=datetime.now(UTC),
+        outcome=SimpleNamespace(value="skipped"),
+        reason_code=reasons.WRITE_FORBIDDEN,
+        detail_safe=None,
+        destination_chat_id=chat_id,
+    )
+    screen = views.activity(events=[event], titles={chat_id: "Crypto Deals (main)"})
+
+    assert "Crypto Deals" in screen.text
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_a_group_named_with_markdown_cannot_break_the_activity_screen():
+    """Group titles are attacker-influenced — anyone can name a group `*bold*`."""
+    import uuid as _uuid
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+    from app.domain import reasons
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    chat_id = _uuid.uuid4()
+    event = SimpleNamespace(
+        occurred_at=datetime.now(UTC),
+        outcome=SimpleNamespace(value="skipped"),
+        reason_code=reasons.WRITE_FORBIDDEN,
+        detail_safe=None,
+        destination_chat_id=chat_id,
+    )
+    screen = views.activity(events=[event], titles={chat_id: "_evil* [group](x) #1"})
+    assert_valid_markdown_v2(screen.text)
+
+
+# --------------------------------------------------------------------------- #
+# Intervals in the units they were typed in
+# --------------------------------------------------------------------------- #
+def test_an_interval_reads_back_as_it_was_set():
+    """ "12.0 hours" is what rounding produces; "90 minutes" is what someone
+    typed, and cannot be expressed as a rounded number of hours at all."""
+    from app.adminbot import views
+
+    assert views.interval_label(43_200) == "12 hours"
+    assert views.interval_label(5_400) == "1 hour 30 minutes"
+    assert views.interval_label(3_600) == "1 hour"
+    assert views.interval_label(1_800) == "30 minutes"
+    assert views.repeat_label(None) == "once, then stop"
+
+
+def test_the_confirm_screen_shows_the_whole_ad_and_says_what_it_will_do():
+    """It clipped at 300 characters — the one screen where the customer is
+    deciding whether to post showed the least of what they were posting."""
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    body = "Our October offer is live. " * 30
+    fresh = views.ad_confirm(
+        broadcast=fake_broadcast(body_text=body), target_count=5, estimate_s=12
+    )
+    assert views.escape(body.strip()) in fresh.text
+    assert "Send this ad?" in fresh.text
+
+    resuming = views.ad_confirm(
+        broadcast=fake_broadcast(body_text=body, status=BroadcastStatus.paused),
+        target_count=5,
+        estimate_s=12,
+    )
+    assert "Save and resume?" in resuming.text
+    assert "already posted to are not posted to again" in resuming.text
+    for screen in (fresh, resuming):
+        assert len(screen.text) <= 4096
+        assert_valid_markdown_v2(screen.text)
+
+
+def test_a_clipped_confirm_screen_is_still_valid_markdown():
+    from app.adminbot import views
+    from app.config import get_settings
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    body = ".!-()" * (get_settings().max_broadcast_text_len // 5)
+    screen = views.ad_confirm(
+        broadcast=fake_broadcast(body_text=body), target_count=5, estimate_s=1
+    )
+    assert "more characters" in screen.text
+    assert len(screen.text) <= 4096
+    assert_valid_markdown_v2(screen.text)

@@ -81,6 +81,7 @@ BROADCAST_INACTIVE: Final = "broadcast_inactive"
 BROADCAST_POSTED: Final = "broadcast_posted"
 BROADCAST_CANCELLED: Final = "broadcast_cancelled"
 BROADCAST_PAUSED_BY_CUSTOMER: Final = "broadcast_paused_by_customer"
+BROADCAST_BEING_EDITED: Final = "broadcast_being_edited"
 BROADCAST_EMPTY: Final = "broadcast_empty"
 
 # --- auto-reply -------------------------------------------------------------
@@ -167,6 +168,9 @@ REASON_TEXT: dict[str, str] = {
     BROADCAST_CANCELLED: "Cancelled before this group was reached.",
     BROADCAST_PAUSED_BY_CUSTOMER: (
         "You paused this ad. Nothing more will be posted until you resume it."
+    ),
+    BROADCAST_BEING_EDITED: (
+        "Paused while you edit it. Save and resume to continue where it left off."
     ),
     BROADCAST_EMPTY: "The broadcast has no message to send.",
     AUTO_REPLY_SENT: "Replied automatically to an incoming direct message.",

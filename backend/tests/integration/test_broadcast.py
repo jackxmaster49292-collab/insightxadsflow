@@ -752,3 +752,129 @@ async def test_pausing_a_repeating_ad_stops_the_next_round(client, actor, sessio
     )
     assert claimed == []
     assert reasons.describe(reasons.BROADCAST_PAUSED_BY_CUSTOMER).startswith("You paused")
+
+
+# --------------------------------------------------------------------------- #
+# Editing an ad that is already running
+# --------------------------------------------------------------------------- #
+async def test_editing_the_groups_keeps_what_already_went_out(client, actor, session):
+    """The one thing an edit must never do is make an ad post twice to a group
+    it has already reached."""
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    sent_first = len(script_for(ctx["connection_id"]).calls_to("send_text"))
+    assert sent_first == 3
+
+    # The customer re-opens the picker and adds nothing, keeping all three.
+    await broadcast_repo.replace_targets(session, broadcast=broadcast, chat_ids=ctx["chat_ids"])
+    await session.commit()
+
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    assert counts == {"succeeded": 3}, "history survived the edit"
+
+    broadcast.status = BroadcastStatus.sending
+    await broadcast_repo.schedule_targets(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    assert len(script_for(ctx["connection_id"]).calls_to("send_text")) == sent_first
+
+
+async def test_a_group_removed_by_an_edit_stops_receiving_it(client, actor, session):
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+
+    kept = await broadcast_repo.replace_targets(
+        session, broadcast=broadcast, chat_ids=ctx["chat_ids"][:2]
+    )
+    await session.commit()
+
+    assert kept == 2
+    remaining = await broadcast_repo.target_chat_ids(session, broadcast_id=broadcast.id)
+    assert remaining == ctx["chat_ids"][:2]
+
+
+async def test_an_edit_that_adds_a_group_posts_only_to_the_new_one(client, actor, session):
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    # Start with two of the three, send, then add the third.
+    await broadcast_repo.replace_targets(session, broadcast=broadcast, chat_ids=ctx["chat_ids"][:2])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    await broadcast_repo.replace_targets(session, broadcast=broadcast, chat_ids=ctx["chat_ids"])
+    broadcast.status = BroadcastStatus.sending
+    await broadcast_repo.schedule_targets(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+
+    sends = script_for(ctx["connection_id"]).calls_to("send_text")
+    assert len(sends) == 3, "two in the first pass, only the new group in the second"
+
+
+async def test_positions_are_renumbered_so_the_pacing_stays_even(client, actor, session):
+    """Gaps in position would leave the stagger uneven after an edit."""
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=1000)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_repo.replace_targets(
+        session, broadcast=broadcast, chat_ids=[ctx["chat_ids"][0], ctx["chat_ids"][2]]
+    )
+    await session.commit()
+
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [t.position for t in targets] == [0, 1]
+
+
+async def test_sending_a_completed_ad_again_reopens_every_group(client, actor, session):
+    """Without reopening there is nothing pending, nothing is scheduled, and
+    the ad sits in "sending" forever with no work that could ever settle it."""
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import ADMIN_CHAT, Sent, a_callback
+
+    Sent.reset()
+    state = FSMContext(
+        storage=MemoryStorage(),
+        key=StorageKey(bot_id=1, chat_id=ADMIN_CHAT, user_id=ADMIN_CHAT),
+    )
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.completed
+
+    await handlers.ad_actions(
+        a_callback(f"ad:{broadcast.id}:send"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.sending
+    counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
+    assert counts == {"pending": 2}, "a re-run addresses every group again"
+
+    await drain(session, broadcast.id)
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.completed, "and it can finish again"

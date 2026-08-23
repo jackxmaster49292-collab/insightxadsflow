@@ -490,6 +490,42 @@ The preview is still plain text — a bot cannot render a custom emoji at all, s
 the formatting summary remains the only honest way to confirm premium emoji
 survived without posting the ad.
 
+### ADR-042 — "Completed" is not "delivered", and the screens say which
+**Context.** A broadcast reaches ``completed`` when its round has no work left —
+including when every single target was refused. The list showed the same ✅ for
+an ad that reached 500 groups and one that reached none, and the customer read
+"succeeded" where the truth was "gave up".
+**Decision.** ``delivery_icon`` corrects the status icon by the counts: finished
+with attempts but zero deliveries is ⚠️, and the list shows ``delivered/attempted``
+beside each ad. The detail screen adds a sentence — "2 of 5 did not receive it" —
+and the Events screen now names the **group** beside each reason, because twelve
+identical "not allowed to post" lines say something is wrong but not where.
+Group titles are attacker-influenced and escaped like everything else.
+**Consequence.** The status enum is untouched — ``completed`` still means the
+machine finished — only its presentation stops implying delivery. Skips also
+call ``settle()`` (they always did), so a fully-refused round completes rather
+than hanging; what changed is that it no longer completes *quietly*.
+
+### ADR-043 — A live ad is editable, and an edit pauses it first
+**Context.** An ad that repeats for weeks will need its wording, groups or
+interval changed. The only path was Stop → new ad → re-pick 500 groups.
+**Decision.** ✏️ Edit reopens the same compose screen (one screen, so two
+cannot drift apart). A ``sending`` ad is paused first with its own reason code —
+edited mid-round, some groups get the old wording and some the new, with no
+record of which. ``replace_targets`` now **keeps the row** of every group that
+stays selected, preserving what already happened to it this round; only removed
+groups lose their row. Save-and-resume re-queues, and only pending targets are
+re-timed. Sending a ``completed``/``cancelled`` ad again reopens every target
+first — without that there is nothing pending and the ad would sit in "sending"
+forever with no work that could ever settle it; the confirm screen calls this
+"Run this ad again?" and says every group is posted to again.
+**Consequence.** The edit invariant is the delivery invariant: a group already
+posted to this round is never posted to twice, verified by
+``test_editing_the_groups_keeps_what_already_went_out``. Repeat intervals may
+now also be given in minutes (``90m``, ``1h 30m``); the parser is strict because
+an interval misread by a factor of sixty posts every minute instead of every
+hour, from the customer's own account. The hourly floor is unchanged.
+
 ---
 
 ## Open tradeoffs

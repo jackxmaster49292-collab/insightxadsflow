@@ -110,32 +110,64 @@ async def discard_drafts(session: AsyncSession, *, user_id: uuid.UUID) -> int:
 async def replace_targets(
     session: AsyncSession, *, broadcast: Broadcast, chat_ids: Sequence[uuid.UUID]
 ) -> int:
-    """Set the target list while the broadcast is still a draft.
+    """Set the target list, keeping what already happened to each group.
 
-    Written as DELETE + INSERT rather than mutating ``broadcast.targets``:
-    touching the collection triggers a lazy load, which raises MissingGreenlet
-    under async SQLAlchemy.
+    A group that stays selected keeps its row, and with it the record of whether
+    this round already posted there. That is the whole point: editing the groups
+    of an ad mid-flight must not make it post twice to a group it has already
+    reached. Only groups being *removed* lose their row, which is what removing
+    them means.
+
+    Written against the rows rather than ``broadcast.targets``: touching the
+    collection triggers a lazy load, which raises MissingGreenlet under async
+    SQLAlchemy.
     """
-    await session.execute(
-        delete(BroadcastTarget).where(BroadcastTarget.broadcast_id == broadcast.id)
+    result = await session.execute(
+        select(BroadcastTarget).where(BroadcastTarget.broadcast_id == broadcast.id)
     )
+    existing = {target.chat_id: target for target in result.scalars().all()}
+
+    wanted: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
-    position = 0
     for chat_id in chat_ids:
-        if chat_id in seen:
-            continue
-        seen.add(chat_id)
-        session.add(
-            BroadcastTarget(
-                broadcast_id=broadcast.id,
-                chat_id=chat_id,
-                position=position,
-                status=JobStatus.pending,
+        if chat_id not in seen:
+            seen.add(chat_id)
+            wanted.append(chat_id)
+
+    for chat_id, target in existing.items():
+        if chat_id not in seen:
+            await session.delete(target)
+
+    for position, chat_id in enumerate(wanted):
+        kept = existing.get(chat_id)
+        if kept is None:
+            session.add(
+                BroadcastTarget(
+                    broadcast_id=broadcast.id,
+                    chat_id=chat_id,
+                    position=position,
+                    status=JobStatus.pending,
+                )
             )
-        )
-        position += 1
+        else:
+            kept.position = position
     await session.flush()
-    return position
+    return len(wanted)
+
+
+async def chat_titles(session: AsyncSession, *, broadcast_id: uuid.UUID) -> dict[uuid.UUID, str]:
+    """Group titles for this ad's targets, keyed by chat id.
+
+    The activity screen listed a reason with no group beside it, which answers
+    "something was skipped" but not "which group, and should I care?" — the only
+    two questions anyone opens that screen with.
+    """
+    result = await session.execute(
+        select(TelegramChat.id, TelegramChat.title)
+        .join(BroadcastTarget, BroadcastTarget.chat_id == TelegramChat.id)
+        .where(BroadcastTarget.broadcast_id == broadcast_id)
+    )
+    return {row[0]: row[1] for row in result.all()}
 
 
 async def target_chat_ids(session: AsyncSession, *, broadcast_id: uuid.UUID) -> list[uuid.UUID]:
@@ -312,6 +344,27 @@ async def status_counts(session: AsyncSession, *, broadcast_id: uuid.UUID) -> di
         .group_by(BroadcastTarget.status)
     )
     return {status.value: int(count) for status, count in result.all()}
+
+
+async def counts_for(
+    session: AsyncSession, *, broadcast_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, int]]:
+    """Delivery counts for several ads at once, for the list screen.
+
+    One grouped query rather than one per ad: the list shows up to fifty, and a
+    query per row is how a screen that used to open instantly stops doing so.
+    """
+    if not broadcast_ids:
+        return {}
+    result = await session.execute(
+        select(BroadcastTarget.broadcast_id, BroadcastTarget.status, func.count())
+        .where(BroadcastTarget.broadcast_id.in_(broadcast_ids))
+        .group_by(BroadcastTarget.broadcast_id, BroadcastTarget.status)
+    )
+    counts: dict[uuid.UUID, dict[str, int]] = {}
+    for broadcast_id, status, count in result.all():
+        counts.setdefault(broadcast_id, {})[status.value] = int(count)
+    return counts
 
 
 async def remaining_count(session: AsyncSession, *, broadcast_id: uuid.UUID) -> int:

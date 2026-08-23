@@ -538,7 +538,40 @@ async def test_the_repeat_can_be_set_and_turned_off(client, actor, state, sessio
     assert "once, then stop" in Sent.last()
 
 
-@pytest.mark.parametrize("answer", ["soon", "0.5", "inf", "nan", "99999", "-3"])
+@pytest.mark.parametrize(
+    ("answer", "seconds"),
+    [
+        ("6", 21_600),
+        ("6h", 21_600),
+        ("90m", 5_400),
+        ("1h 30m", 5_400),
+        ("120 minutes", 7_200),
+        ("2 hours", 7_200),
+        ("1.5h", 5_400),
+    ],
+)
+async def test_a_repeat_can_be_given_in_minutes_or_hours(
+    client, actor, state, session, answer, seconds
+):
+    """ "90m" cannot be said in whole hours, and a bare number has to keep
+    meaning what the prompt says it means."""
+    user_id = uuid.UUID(actor.id)
+    await prepare_account(actor, groups=1)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Nightly"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Hi"), user_id=user_id, state=state)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:repeat"), user_id=user_id, state=state)
+    await handlers.ad_repeat(a_message(answer), user_id=user_id, state=state)
+
+    await session.refresh(broadcast)
+    assert broadcast.repeat_every_s == seconds
+
+
+@pytest.mark.parametrize(
+    "answer", ["soon", "30m", "inf", "nan", "99999", "-3", "3 apples", "", "1 fortnight"]
+)
 async def test_a_repeat_that_cannot_be_honoured_is_refused(client, actor, state, session, answer):
     """`inf` and `nan` parse as floats. Reaching the database, they are an
     overflow rather than a sentence anyone can act on."""
@@ -555,6 +588,47 @@ async def test_a_repeat_that_cannot_be_honoured_is_refused(client, actor, state,
     await session.refresh(broadcast)
     assert broadcast.repeat_every_s is None, "left unchanged"
     assert_valid_markdown_v2(Sent.last())
+
+
+async def test_a_running_ad_can_be_edited(client, actor, state, session):
+    """An ad that repeats for weeks needs its wording changed at some point, and
+    the alternative — build a new one and re-pick 500 groups — is not one."""
+    user_id = uuid.UUID(actor.id)
+    await prepare_account(actor, groups=2)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Live"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Old wording"), user_id=user_id, state=state)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    broadcast.status = BroadcastStatus.sending
+    await session.commit()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:edit"), user_id=user_id, state=state)
+
+    await session.refresh(broadcast)
+    assert broadcast.status is BroadcastStatus.paused, "not edited underneath a running worker"
+    assert broadcast.paused_reason_code == reasons.BROADCAST_BEING_EDITED
+    assert "Paused while you edit" in Sent.last()
+    assert f"ad:{broadcast.id}:pick:0" in Sent.buttons(), "groups editable too"
+
+    await handlers.ad_text(a_message("New wording"), user_id=user_id, state=state)
+    await session.refresh(broadcast)
+    assert broadcast.body_text == "New wording"
+
+
+async def test_editing_offers_no_discard_button(client, actor, state, session):
+    """Discard deletes drafts. On a live ad the button would either do nothing
+    or something alarming, and neither is a button worth showing."""
+    user_id = uuid.UUID(actor.id)
+    await prepare_account(actor, groups=1)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Live"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Hi"), user_id=user_id, state=state)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    broadcast.status = BroadcastStatus.paused
+    await session.commit()
+
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:edit"), user_id=user_id, state=state)
+    assert "Discard" not in Sent.last()
 
 
 async def test_starting_a_second_ad_discards_the_unfinished_one(client, actor, state, session):

@@ -151,8 +151,9 @@ already posted cannot be unsent, and the confirmation screen says that.
 
 ### Repeating an ad
 
-**🔁 Repeat** on the compose screen asks how many hours between rounds. `6`
-posts it four times a day; `0` posts it once and stops, which is the default.
+**🔁 Repeat** on the compose screen asks how often. Answer in hours, minutes
+or both — `6h`, `90m`, `1h 30m`; a bare number means hours. `0` posts it once
+and stops, which is the default.
 
 A round is one pass over every group you picked. When it finishes, the clock
 starts — so a repeat of 6 hours means six hours **after the last group receives
@@ -176,6 +177,26 @@ if an admin has since let you post there, the next round gets through.
 **⏸ Pause** stops the next round; **▶️ Resume** picks up where it left off
 without re-posting to groups already done in the current round. **🚫 Stop**
 ends it for good.
+
+### Editing an ad that is already running
+
+**✏️ Edit** on the ad's screen reopens the compose view — message, image,
+pause, repeat and groups are all changeable. A running ad is paused first,
+deliberately: changed mid-round, some groups would get the old wording and some
+the new. **Save and resume** continues from where it left off; groups this
+round has already posted to are not posted to again, and a group you untick
+stops receiving future rounds. On an ad that already finished, the same button
+reads **Run this ad again?** and does exactly that — every selected group is
+posted to again.
+
+### When a group did not get it
+
+A finished ad that some groups refused is **not** shown as a plain green tick —
+the list shows ⚠️ with a delivered count like `3/5`, and the ad's screen says
+*"2 of 5 did not receive it"*. **📊 Events** names each group and the reason —
+usually the account is not allowed to post there any more, or the group vanished.
+On a repeating ad every group is re-checked each round, so a fixed permission
+heals on its own; on a one-shot ad, **Retry** covers the ones that failed.
 
 While it is sending, the ad's screen shows progress, per-group outcomes, and a
 **Retry** button for groups that did not receive it. Retry never re-posts to a

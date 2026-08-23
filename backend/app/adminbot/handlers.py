@@ -17,6 +17,7 @@ blocks on Telegram I/O.
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from typing import Any
 
@@ -364,7 +365,13 @@ async def _ads_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
     async with session_scope() as session:
         broadcasts = await broadcast_repo.list_for_user(session, user_id=user_id)
         connection = await _active_connection(session, user_id)
-    return views.ads_list(broadcasts=broadcasts, page=page, can_create=connection is not None)
+        counts = await broadcast_repo.counts_for(session, broadcast_ids=[b.id for b in broadcasts])
+    return views.ads_list(
+        broadcasts=broadcasts,
+        page=page,
+        can_create=connection is not None,
+        counts_by_id=counts,
+    )
 
 
 async def _rules_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
@@ -986,32 +993,70 @@ async def ad_delay(message: Message, user_id: uuid.UUID, state: FSMContext, **_e
     await _send(message, await _compose_screen(user_id, broadcast_id))
 
 
+#: ``90m``, ``6h``, ``1h 30m``, ``45 minutes``. A bare number is hours, because
+#: that is what the prompt asks for and what most repeats are.
+#: Longest alternative first. Ordered the other way, ``m`` matches the start of
+#: "minutes" and the leftover "inutes" makes the whole thing unparseable.
+_INTERVAL_PART = re.compile(r"(\d+(?:\.\d+)?)\s*(hours|hour|hrs|hr|h|minutes|minute|mins|min|m)?")
+
+
+def _parse_interval(text: str) -> int | None:
+    """Seconds, or None if it is not a time anyone meant.
+
+    Deliberately strict about what it accepts: an interval misread by a factor
+    of sixty is an ad posting every minute instead of every hour, from the
+    customer's own account.
+    """
+    cleaned = text.strip().lower()
+    if not cleaned:
+        return None
+
+    total = 0.0
+    consumed = 0
+    for match in _INTERVAL_PART.finditer(cleaned):
+        if match.start() != consumed and cleaned[consumed : match.start()].strip():
+            return None  # something between the numbers that is not a unit
+        amount = float(match.group(1))
+        unit = match.group(2) or "h"
+        total += amount * (60 if unit.startswith("m") else 3600)
+        consumed = match.end()
+    if consumed == 0 or cleaned[consumed:].strip():
+        return None
+    # ``inf`` and ``nan`` cannot reach here through the digits-only pattern, but
+    # a long enough number still can, and a timestamp overflow is a crash rather
+    # than a message anyone can act on.
+    if not math.isfinite(total) or total < 0:
+        return None
+    return int(total)
+
+
 @router.message(ComposeAd.repeat)
 async def ad_repeat(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
-    raw = (message.text or "").strip().rstrip("h")
-    try:
-        hours = float(raw)
-    except ValueError:
-        await _ask(message, "Send a number of hours, like `6`, or `0` to post once\\.")
-        return
-
-    # ``inf`` and ``nan`` parse as floats and would reach the database as an
-    # overflow rather than a message anyone can act on.
-    if not math.isfinite(hours) or hours > _MAX_REPEAT_HOURS:
+    seconds = _parse_interval(message.text or "")
+    if seconds is None:
         await _ask(
             message,
-            f"Send a number of hours up to {_MAX_REPEAT_HOURS}, or `0` to post once\\.",
+            "Send a time like `90m`, `6h` or `1h 30m` — or `0` to post once\\.",
+        )
+        return
+
+    if seconds > _MAX_REPEAT_HOURS * 3600:
+        await _ask(
+            message,
+            f"The longest repeat is {_MAX_REPEAT_HOURS // 24} days\\. "
+            "Past that it is not really a schedule\\.",
         )
         return
 
     settings = get_settings()
-    floor_hours = settings.min_broadcast_repeat_s / 3600
-    if hours and hours < floor_hours:
+    if seconds and seconds < settings.min_broadcast_repeat_s:
         await _ask(
             message,
-            f"The minimum is {floor_hours:.0f} hour\\. Posting the same message "
-            "into the same group more often than that is what gets an account "
-            "reported and banned\\.",
+            f"The shortest repeat is "
+            f"{views.escape(views.interval_label(settings.min_broadcast_repeat_s))}\\. "
+            "The same message arriving in the same group more often than that is "
+            "what gets an account reported and banned — and it is your account, "
+            "not this bot's\\.",
         )
         return
 
@@ -1028,7 +1073,7 @@ async def ad_repeat(message: Message, user_id: uuid.UUID, state: FSMContext, **_
             await state.clear()
             await _go_home(message, user_id)
             return
-        broadcast.repeat_every_s = int(hours * 3600) if hours else None
+        broadcast.repeat_every_s = seconds or None
 
     await state.set_state(None)
     await _send(message, await _compose_screen(user_id, broadcast_id))
@@ -1066,11 +1111,16 @@ _AD_PROMPTS = {
     ),
     "repeat": (
         ComposeAd.repeat,
-        "How often should this ad be posted again, in hours?\n\n"
-        "`6` posts it four times a day\\. Send `0` to post it once and stop\\.\n\n"
-        "The minimum is 1 hour\\. The same message arriving in the same group "
-        "more often than that is what gets an account reported — and it is your "
-        "account, not this bot's\\.",
+        "How often should this ad be posted again?\n\n"
+        "`6h` — four times a day\n"
+        "`90m` — every hour and a half\n"
+        "`1h 30m` — the same thing\n"
+        "`0` — post it once and stop\n\n"
+        "A bare number means hours\\. The clock starts when a round *finishes*, "
+        "so the gap is measured from the last group receiving it\\.\n\n"
+        "The shortest allowed is 1 hour\\. The same message arriving in the same "
+        "group more often than that is what gets an account reported — and it is "
+        "your account, not this bot's\\.",
     ),
 }
 
@@ -1133,11 +1183,40 @@ async def ad_actions(
             await query.answer()
             return
 
+        if action == "edit":
+            # Paused first, deliberately. Changing the wording or the groups of
+            # an ad while the worker is mid-round means some groups get the old
+            # version and some the new, with no way to tell which got which.
+            if broadcast.status is BroadcastStatus.sending:
+                from app.domain import reasons
+
+                await broadcast_service.pause(
+                    session, broadcast=broadcast, reason_code=reasons.BROADCAST_BEING_EDITED
+                )
+            await state.clear()
+            await state.update_data(broadcast_id=str(broadcast.id))
+            await _render(
+                query,
+                views.ad_compose(
+                    broadcast=broadcast,
+                    target_count=len(target_ids),
+                    estimate_s=estimate,
+                    account_is_premium=is_premium,
+                    premium_checked=premium_checked,
+                ),
+            )
+            await query.answer("Paused while you edit.")
+            return
+
         if action == "events":
             events = await event_repo.list_for_broadcast(
                 session, user_id=user_id, broadcast_id=broadcast.id, limit=12
             )
-            await _render(query, views.activity(events=events, back=f"ad:{broadcast.id}"))
+            titles = await broadcast_repo.chat_titles(session, broadcast_id=broadcast.id)
+            await _render(
+                query,
+                views.activity(events=events, titles=titles, back=f"ad:{broadcast.id}"),
+            )
             await query.answer()
             return
 
@@ -1149,6 +1228,14 @@ async def ad_actions(
             return
 
         if action == "send":
+            # Sending a finished ad again means running it again: every target
+            # is reopened, exactly as a repeat round reopens them. Without this
+            # there is nothing pending, queue() schedules nothing, and the ad
+            # sits in "sending" forever with no work that could ever settle it.
+            if broadcast.status in (BroadcastStatus.completed, BroadcastStatus.cancelled):
+                await broadcast_repo.reopen_for_repeat(
+                    session, broadcast=broadcast, start_at=broadcast_repo.now()
+                )
             try:
                 queued = await broadcast_service.queue(session, broadcast=broadcast)
             except broadcast_service.BroadcastValidationError as exc:

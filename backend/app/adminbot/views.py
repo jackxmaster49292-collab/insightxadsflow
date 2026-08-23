@@ -483,7 +483,13 @@ def confirm_disconnect(*, connection: TelegramConnection) -> Screen:
 # --------------------------------------------------------------------------- #
 # Ads (broadcasts)
 # --------------------------------------------------------------------------- #
-def ads_list(*, broadcasts: Sequence[Broadcast], page: int, can_create: bool) -> Screen:
+def ads_list(
+    *,
+    broadcasts: Sequence[Broadcast],
+    page: int,
+    can_create: bool,
+    counts_by_id: dict[uuid.UUID, dict[str, int]] | None = None,
+) -> Screen:
     if not broadcasts:
         lines = [
             "📣 *Ads*",
@@ -505,10 +511,12 @@ def ads_list(*, broadcasts: Sequence[Broadcast], page: int, can_create: bool) ->
         )
 
     window, page, pages = _page_of(broadcasts, page, PAGE_SIZE)
+    counts_by_id = counts_by_id or {}
     buttons = [
         [
             InlineKeyboardButton(
-                text=f"{icon(b.status.value)} {b.name[:36]}",
+                text=f"{delivery_icon(b, counts_by_id.get(b.id, {}))} {b.name[:30]}"
+                + _delivered_suffix(counts_by_id.get(b.id, {})),
                 callback_data=f"ad:{b.id}",
             )
         ]
@@ -598,13 +606,20 @@ def ad_compose(
     account_is_premium: bool = True,
     premium_checked: bool = True,
 ) -> Screen:
-    """The draft screen. Every field stays editable until Send is tapped."""
+    """The compose screen, for a draft and for editing an ad already running.
+
+    The same screen either way, because the fields are the same and a second
+    near-identical screen is how two of them drift apart. What changes is the
+    button at the bottom and the sentence above it: sending a draft starts an
+    ad, saving an edit resumes one that was paused to be edited.
+    """
     has_media = broadcast.media_kind.value != "none"
     body = broadcast.body_text.strip()
+    editing = broadcast.status is not BroadcastStatus.draft
 
     shown, clipped = preview(body)
     lines = [
-        f"📝 *{escape(broadcast.name)}*",
+        f"{'✏️' if editing else '📝'} *{escape(broadcast.name)}*",
         "",
         "*Message*",
         f"_{shown}_" if body else "_not written yet_",
@@ -650,6 +665,15 @@ def ad_compose(
     )
 
     ready = bool(body or has_media) and target_count > 0
+    if editing:
+        # Not conditional on readiness: what state the ad is in is the first
+        # thing to say, and it is most needed exactly when something is missing.
+        lines += [
+            "",
+            "_Paused while you edit\\. Groups this round has already posted to "
+            "will not be posted to again — the changes take effect from where it "
+            "left off\\._",
+        ]
     if not ready:
         missing = []
         if not body and not has_media:
@@ -673,15 +697,42 @@ def ad_compose(
                     callback_data=f"ad:{broadcast.id}:pick:0",
                 )
             ],
-            [InlineKeyboardButton(text="🚀 Send now", callback_data=f"ad:{broadcast.id}:confirm")]
+            [
+                InlineKeyboardButton(
+                    text="▶️ Save and resume" if editing else "🚀 Send now",
+                    callback_data=f"ad:{broadcast.id}:confirm",
+                )
+            ]
             if ready
             else [],
             [
-                InlineKeyboardButton(text="🗑 Discard", callback_data=f"ad:{broadcast.id}:discard"),
+                InlineKeyboardButton(text="🗑 Discard", callback_data=f"ad:{broadcast.id}:discard")
+                if not editing
+                else InlineKeyboardButton(text="⬅️ Back to ad", callback_data=f"ad:{broadcast.id}"),
                 InlineKeyboardButton(text="⬅️ Ads", callback_data="nav:ads:0"),
             ],
         ),
     )
+
+
+def delivery_icon(broadcast: Broadcast, counts: dict[str, int]) -> str:
+    """The status icon, corrected by what actually arrived.
+
+    ``completed`` means the round stopped having work to do — not that anyone
+    received anything. An ad whose only group refused it finished as a green
+    tick, which reads as "sent" and is the opposite of what happened.
+    """
+    delivered = counts.get("succeeded", 0)
+    attempted = sum(counts.values())
+    finished = broadcast.status in (BroadcastStatus.completed, BroadcastStatus.cancelled)
+    if finished and attempted and not delivered:
+        return "⚠️"
+    return icon(broadcast.status.value)
+
+
+def _delivered_suffix(counts: dict[str, int]) -> str:
+    attempted = sum(counts.values())
+    return f"  {counts.get('succeeded', 0)}/{attempted}" if attempted else ""
 
 
 def _has_premium_emoji(broadcast: Broadcast) -> bool:
@@ -697,7 +748,16 @@ def ad_confirm(
     premium_checked: bool = True,
 ) -> Screen:
     has_media = broadcast.media_kind.value != "none"
-    preview = broadcast.body_text.strip()[:300] or "(image only)"
+    # Three moods: a fresh send, resuming an ad paused mid-round, and running a
+    # finished one again. Each promises something different, and the promise
+    # about groups already posted to is only true for the middle one.
+    finished = broadcast.status in (BroadcastStatus.completed, BroadcastStatus.cancelled)
+    editing = broadcast.status is not BroadcastStatus.draft and not finished
+    # Room left for the summary and the warning below it.
+    shown, clipped = preview(broadcast.body_text.strip(), PREVIEW_CHARS - 600)
+    body = shown or escape("(image only)")
+    if clipped:
+        body += f"_\n\n_…and {clipped} more characters"
     warning = "\n".join(
         premium_emoji_warning(
             has_premium_emoji=_has_premium_emoji(broadcast),
@@ -705,20 +765,36 @@ def ad_confirm(
             checked=premium_checked,
         )
     )
+    if finished:
+        header = "🚀 *Run this ad again?*"
+        promise = (
+            "Every selected group is posted to again, including ones that already received it\\."
+        )
+    elif editing:
+        header = "▶️ *Save and resume?*"
+        promise = "Groups this round already posted to are not posted to again\\."
+    else:
+        header = "🚀 *Send this ad?*"
+        promise = (
+            "It posts only to groups this account has already joined\\. "
+            "You can pause it once it starts, but messages already posted cannot "
+            "be unsent\\."
+        )
     return Screen(
-        "🚀 *Send this ad?*\n\n"
-        f"_{escape(preview)}_\n\n"
+        f"{header}\n\n_{body}_\n\n"
         f"*To* — {target_count} groups\n"
         f"*Image* — {'yes' if has_media else 'no'}\n"
         f"*Pause between groups* — {seconds_label(broadcast.delay_ms)}\n"
         f"*Takes about* — {escape(humanize(estimate_s))} per round\n"
         f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}\n"
-        f"{warning}\n\n"
-        "It posts only to groups this account has already joined\\. "
-        "You can pause it once it starts, but messages already posted cannot "
-        "be unsent\\.",
+        f"{warning}\n\n" + promise,
         _rows(
-            [InlineKeyboardButton(text="Yes, send", callback_data=f"ad:{broadcast.id}:send")],
+            [
+                InlineKeyboardButton(
+                    text="Yes, resume" if editing else "Yes, send",
+                    callback_data=f"ad:{broadcast.id}:send",
+                )
+            ],
             [InlineKeyboardButton(text="Cancel", callback_data=f"ad:{broadcast.id}")],
         ),
     )
@@ -727,7 +803,7 @@ def ad_confirm(
 def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int) -> Screen:
     done = counts.get("succeeded", 0)
     lines = [
-        f"{icon(broadcast.status.value)} *{escape(broadcast.name)}*",
+        f"{delivery_icon(broadcast, counts)} *{escape(broadcast.name)}*",
         "",
         f"*Status* — {escape(broadcast.status.value)}",
     ]
@@ -737,8 +813,18 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
     lines += [
         f"*Progress* — {done}/{target_count} groups",
     ]
+
+    # A finished ad that reached nobody, or only some, says so in words. The
+    # arithmetic is there in the counts either way, but nobody reads a status
+    # line as a subtraction problem.
+    missed = sum(counts.get(s, 0) for s in ("skipped", "failed", "dead_letter", "needs_attention"))
+    if missed:
+        lines.append(
+            f"⚠️ *{missed} of {target_count} did not receive it\\.* "
+            "Tap *Events* for the group and the reason\\."
+        )
     if broadcast.repeat_every_s:
-        lines.append(f"*Repeat* — every {escape(humanize(broadcast.repeat_every_s))}")
+        lines.append(f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}")
         if broadcast.repeat_count:
             lines.append(f"*Rounds sent* — {broadcast.repeat_count}")
         if broadcast.next_run_at and broadcast.status is BroadcastStatus.sending:
@@ -785,6 +871,11 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
         "\n".join(lines),
         _rows(
             controls,
+            # Editing is available at every stage after draft. An ad that repeats
+            # for weeks will need its wording, its groups or its interval changed
+            # at some point, and the alternative — build a new one and re-pick 500
+            # groups — is not one.
+            [InlineKeyboardButton(text="✏️ Edit", callback_data=f"ad:{broadcast.id}:edit")],
             [InlineKeyboardButton(text="📊 Events", callback_data=f"ad:{broadcast.id}:events")],
             [InlineKeyboardButton(text="🚫 Stop", callback_data=f"ad:{broadcast.id}:cancel")]
             if stoppable
@@ -1078,16 +1169,33 @@ def chats_list(*, chats: Sequence, page: int, other_count: int = 0) -> Screen:  
     )
 
 
-def activity(*, events: Sequence, back: str = "nav:home") -> Screen:  # type: ignore[type-arg]
+def activity(
+    *,
+    events: Sequence,  # type: ignore[type-arg]
+    titles: dict[uuid.UUID, str] | None = None,
+    back: str = "nav:home",
+) -> Screen:
+    """What happened, per group.
+
+    The group name is the point of this screen. Without it the list reads
+    "⏭ not allowed to post" twelve times, which tells you something is wrong but
+    not which group to go and fix.
+    """
     if not events:
         return Screen("📊 *Activity*\n\nNothing recorded yet\\.", _rows(_home_row()))
 
+    titles = titles or {}
     lines = ["📊 *Recent activity*", ""]
     for event in events[:12]:
-        when = event.occurred_at.strftime("%d %b %H:%M")
-        lines.append(
-            f"{icon(event.outcome.value)} `{when}` {escape(event.detail_safe or event.reason_code)}"
-        )
+        stamp = event.occurred_at.strftime("%d %b %H:%M")
+        what = escape(event.detail_safe or reasons.describe(event.reason_code))
+        where = titles.get(event.destination_chat_id) if event.destination_chat_id else None
+        head = f"{icon(event.outcome.value)} `{stamp}`"
+        if where:
+            lines.append(f"{head} *{escape(where)}*")
+            lines.append(f"   {what}")
+        else:
+            lines.append(f"{head} {what}")
 
     return Screen("\n".join(lines), _rows(_back(back), _home_row()))
 
@@ -1113,7 +1221,24 @@ def seconds_label(milliseconds: int) -> str:
 
 
 def repeat_label(repeat_every_s: int | None) -> str:
-    return f"every {humanize(repeat_every_s)}" if repeat_every_s else "once, then stop"
+    return f"every {interval_label(repeat_every_s)}" if repeat_every_s else "once, then stop"
+
+
+def interval_label(seconds: int) -> str:
+    """A repeat interval in the units it was set in.
+
+    ``humanize`` rounds to one decimal, which reads as "12.0 hours" and cannot
+    express 90 minutes at all — it becomes "1.5 hours". An interval is a setting
+    someone typed, so it is shown back exactly.
+    """
+    minutes = int(seconds // 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} hour" + ("s" if hours != 1 else ""))
+    if minutes:
+        parts.append(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+    return " ".join(parts) or "0 minutes"
 
 
 def when(moment: datetime) -> str:
