@@ -599,6 +599,8 @@ def ad_compose(
         "*Message*",
         f"_{escape(body[:400])}_" if body else "_not written yet_",
     ]
+    if len(body) > 400:
+        lines.append(f"_…and {len(body) - 400} more characters_")
     captured = formatting_summary(broadcast.body_entities or [])
     if captured:
         # The preview cannot show any of this — it is plain text, and a bot may
@@ -620,8 +622,6 @@ def ad_compose(
             "again\\. An ad written before this panel kept formatting has none "
             "stored\\._",
         ]
-    if len(body) > 400:
-        lines.append(f"_…and {len(body) - 400} more characters_")
 
     lines += [
         "",

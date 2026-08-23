@@ -603,3 +603,25 @@ def test_the_compose_screen_says_when_nothing_was_captured():
 
     assert "*Formatting kept* — none" in screen.text
     assert "tap *Message* and send it again" in screen.text
+
+
+def test_the_truncation_note_stays_with_the_message_it_truncates():
+    """It sat after the formatting line, where "…and 199 more characters" read
+    as though the 199 characters were formatting."""
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+
+    broadcast = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Long",
+        status=BroadcastStatus.draft,
+        body_text="x" * 600,
+        body_entities=[{"type": "bold", "offset": 0, "length": 4}],
+        media_kind=SimpleNamespace(value="none"),
+        delay_ms=3000,
+        paused_reason_code=None,
+    )
+    text = views.ad_compose(broadcast=broadcast, target_count=1, estimate_s=0).text
+
+    assert text.index("more characters") < text.index("Formatting kept")
