@@ -88,6 +88,7 @@ async def test_screens_go_out_with_premium_text_and_button_icons(client, actor, 
     from app.adminbot import handlers
 
     premium_icons.set_map({"📡": "999000111", "📣": "999000222"})
+    await connect_bot(actor)  # past the role question, onto the panel
     await handlers.start(handlers_message("/start"), user_id=uuid.UUID(actor.id), state=state)
 
     text, markup = Sent.messages[-1]
@@ -367,6 +368,7 @@ async def test_an_operator_renames_a_button_and_it_comes_from_the_database(
 
     # And the home screen now carries it.
     Sent.reset()
+    await connect_bot(actor)
     await handlers.start(a_message("/start"), user_id=uuid.UUID(actor.id), state=state)
     labels = [b.text for row in Sent.messages[-1][1].inline_keyboard for b in row]
     assert "🚀 Campaigns" in labels

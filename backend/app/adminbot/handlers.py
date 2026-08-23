@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 import re
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -263,8 +264,75 @@ async def start(
     is_operator: bool = False,
     **_extra: Any,
 ) -> None:
+    """The roles, then the panel.
+
+    Asked once, on the first /start only: someone who has already connected an
+    account and run ads has answered it, and asking again every time would put
+    a question in front of the thing they came to use.
+    """
     await state.clear()
-    await _go_home(message, user_id, is_operator=is_operator)
+    async with session_scope() as session:
+        connections = await connection_repo.list_for_user(session, user_id=user_id)
+        broadcasts = await broadcast_repo.list_for_user(session, user_id=user_id)
+    if connections or broadcasts:
+        await _go_home(message, user_id, is_operator=is_operator)
+        return
+    await _send(message, views.roles(links=get_settings().public_links))
+
+
+@router.callback_query(F.data == "nav:roles")
+async def nav_roles(query: CallbackQuery, **_extra: Any) -> None:
+    await _render(query, views.roles(links=get_settings().public_links))
+    await query.answer()
+
+
+@router.callback_query(F.data == "nav:about")
+async def nav_about(query: CallbackQuery, **_extra: Any) -> None:
+    await _render(query, views.about(links=get_settings().public_links))
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("role:"))
+async def choose_role(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    parts = (query.data or "").split(":")
+    role = parts[1] if len(parts) > 1 else ""
+    links = get_settings().public_links
+
+    if role == "adv":
+        await _go_home(query, user_id, is_operator=is_operator)
+        await query.answer()
+        return
+
+    if role == "ins":
+        # Not a separate product — the same numbers this bot already records,
+        # reached directly. Calling it anything more would be a claim the code
+        # does not support.
+        async with session_scope() as session:
+            events = await event_repo.list_recent_for_user(session, user_id=user_id, limit=12)
+        await _render(query, views.activity(events=events, back="nav:roles"))
+        await query.answer()
+        return
+
+    if role == "pub":
+        joined = False
+        if len(parts) > 2 and parts[2] == "notify":
+            async with session_scope() as session:
+                user = await user_repo.get_by_id(session, user_id)
+                if user is not None and user.publisher_interest_at is None:
+                    user.publisher_interest_at = datetime.now(UTC)
+                joined = user is not None
+            await query.answer("Noted — you will be messaged if it opens.")
+        else:
+            async with session_scope() as session:
+                user = await user_repo.get_by_id(session, user_id)
+                joined = bool(user and user.publisher_interest_at)
+            await query.answer()
+        await _render(query, views.publisher_waitlist(joined=joined, links=links))
+        return
+
+    await query.answer()
 
 
 @router.message(Command("panel", "home", "status"))

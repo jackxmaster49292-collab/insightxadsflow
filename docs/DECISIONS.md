@@ -682,6 +682,39 @@ several in the air at once, ~4/s on Fast — an order of magnitude under
 Telegram's documented rate. Counts are taken before ``reopen_for_repeat``,
 which is the only moment a round's outcome exists in full.
 
+### ADR-052 — A public face, and a role question asked once
+**Context.** The bot had no profile description and no route to support,
+updates or policy links, and ``/start`` dropped everyone straight into an
+advertiser panel regardless of why they came.
+**Decision.** ``setMyDescription``/``setMyShortDescription`` are published at
+startup, best-effort like the command menu. Both are **plain text** — Telegram
+allows no entities there, so no clickable links and no custom emoji whatever
+the panel's own screens can do; the links go in as bare URLs and the clickable
+versions live on an About screen inside the bot, where URL buttons work.
+``/start`` asks which side you are on — Advertiser, Publisher/Group owner,
+Insights — but **only on a first start**: once an account or an ad exists the
+question is answered, and re-asking would put a question in front of the thing
+someone came to use. Links come from config; an unset one produces no button.
+**Consequence.** The 512/120-character ceilings are asserted with every link
+configured, because an over-long description is refused wholesale and the
+profile silently keeps its previous text.
+
+### ADR-053 — The publisher side says it is not built
+**Context.** "Publisher / Group owner" implies a marketplace: listings,
+pricing, payment held until delivery, moderation. None of it exists — every
+line of this product posts *your* message to groups *you* joined.
+**Decision.** The role exists on the first screen and its own screen states
+plainly that it is not open, describes what it would need, and points at the
+Advertiser side which is fully built. A "tell me when it opens" button records
+``publisher_interest_at`` — a timestamp rather than a flag, so an operator can
+see demand over time, which is the only thing that would justify building it.
+**Consequence.** A screen that looked like a feature and did nothing would
+cost more trust than an empty one that is honest. The third role is named
+**Insights** and shows the delivery numbers the bot already records — not
+"analyst" and nothing implying analysis the code does not perform. "Campaign"
+remains guard-banned vocabulary (``test_the_word_campaign_is_not_used``), which
+is why the operator's suggested name for it was not used.
+
 ---
 
 ## Open tradeoffs

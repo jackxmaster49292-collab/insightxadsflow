@@ -131,6 +131,7 @@ async def run() -> None:
             premium_icons.set_labels(await panel_buttons_repo.get_map(session))
 
         await _register_commands(bot)
+        await _publish_profile(bot)
         alerts = asyncio.create_task(notifier.run(bot, _stop))
         await build_dispatcher().start_polling(bot, allowed_updates=ALLOWED_UPDATES)
     finally:
@@ -143,6 +144,34 @@ async def run() -> None:
         await close_redis()
         await dispose_engine()
         log.info("adminbot_stopped")
+
+
+async def _publish_profile(bot: Bot) -> None:
+    """Set the description Telegram shows on the bot's profile and empty chat.
+
+    Two Telegram facts shape what goes here, and neither is negotiable:
+    ``setMyDescription`` takes **plain text only** — no entities, so no links
+    and no custom emoji, whatever the panel's own screens can do — and it is
+    capped at 512 characters (120 for the short one). So the links are listed
+    as bare URLs, which is all the profile can carry, and the clickable
+    versions live on the About screen inside the bot where buttons work.
+
+    Best-effort, like the command menu: a failure here costs presentation, not
+    function.
+    """
+    settings = get_settings()
+    short = settings.bot_short_description[:120]
+    parts = [settings.bot_short_description]
+    links = settings.public_links
+    if links:
+        parts += ["", *(f"{label}: {url}" for label, url in links)]
+    description = "\n".join(parts)[:512]
+
+    try:
+        await bot.set_my_short_description(short_description=short)
+        await bot.set_my_description(description=description)
+    except Exception as exc:  # pragma: no cover - network path
+        log.warning("set_profile_failed", error=exc)
 
 
 async def _register_commands(bot: Bot) -> None:

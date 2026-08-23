@@ -162,6 +162,107 @@ def terms() -> Screen:
     )
 
 
+def _link_row(links: Sequence[tuple[str, str]]) -> list[InlineKeyboardButton]:
+    """URL buttons for the configured links, two to a row's worth of width.
+
+    A link that is not configured produces no button at all. A button that
+    opens nothing is worse than an absent one: it reads as broken software
+    rather than as a channel that does not exist yet.
+    """
+    return [InlineKeyboardButton(text=label, url=url) for label, url in links]
+
+
+def roles(*, links: Sequence[tuple[str, str]] = ()) -> Screen:
+    """The first screen: which side of the marketplace are you on?
+
+    Asked before anything else because the two answers need completely
+    different screens, and a panel that assumes the wrong one wastes the first
+    minute of everybody who is not an advertiser.
+    """
+    lines = [
+        "📡 *InsightAdFlow*",
+        "",
+        "Create, schedule and track Telegram group advertisements from one place\\.",
+        "",
+        "*Which describes you?*",
+        "",
+        "📣 *Advertiser* — you have a message and groups you have already "
+        "joined\\. Post to all of them, on a schedule, and see what landed\\.",
+        "",
+        "🏘 *Publisher / Group owner* — you run groups and want paid ads placed in them\\.",
+        "",
+        "📊 *Insights* — what your ads actually did: which groups received "
+        "them, which did not, and why\\.",
+    ]
+    rows = [
+        [InlineKeyboardButton(text="📣 Advertiser", callback_data="role:adv")],
+        [InlineKeyboardButton(text="🏘 Publisher / Group owner", callback_data="role:pub")],
+        [InlineKeyboardButton(text="📊 Insights", callback_data="role:ins")],
+    ]
+    link_row = _link_row(links)
+    return Screen("\n".join(lines), _rows(*rows, link_row))
+
+
+def publisher_waitlist(*, joined: bool, links: Sequence[tuple[str, str]] = ()) -> Screen:
+    """Honest about a side of the product that does not exist yet.
+
+    Everything else in this bot posts *your* message to groups *you* joined.
+    Placing paid ads in someone else's groups is a different product — it needs
+    listings, pricing, escrow and moderation, none of which are built. Saying
+    so beats a screen that looks like a feature and does nothing.
+    """
+    lines = [
+        "🏘 *Publisher / Group owner*",
+        "",
+        "This side is *not open yet*, and it would be dishonest to pretend otherwise\\.",
+        "",
+        "What it will be: you list the groups you run, set a price, and "
+        "advertisers pay to place ads in them\\. That needs listings, pricing, "
+        "payment held until delivery, and moderation — none of which exist "
+        "today\\.",
+        "",
+        "What works *right now*: if you run groups and want to post your own "
+        "message across all of them, that is the *Advertiser* side, and it is "
+        "fully built\\.",
+    ]
+    if joined:
+        lines += ["", "✅ You are on the list — you will be messaged when it opens\\."]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            []
+            if joined
+            else [
+                InlineKeyboardButton(
+                    text="🔔 Tell me when it opens", callback_data="role:pub:notify"
+                )
+            ],
+            [InlineKeyboardButton(text="📣 Use the Advertiser side", callback_data="role:adv")],
+            _link_row(links),
+            _back("nav:roles"),
+        ),
+    )
+
+
+def about(*, links: Sequence[tuple[str, str]] = ()) -> Screen:
+    lines = [
+        "📡 *InsightAdFlow*",
+        "",
+        "Create, schedule and track Telegram group advertisements from one place\\.",
+        "",
+        "It posts *your* message from *your* account to groups *you* have "
+        "already joined\\. It never joins a group for you, never reads a member "
+        "list, and never messages someone who did not write first\\.",
+    ]
+    if not links:
+        lines += [
+            "",
+            "_No support or updates channel is configured on this deployment yet\\._",
+        ]
+    return Screen("\n".join(lines), _rows(_link_row(links), _back("nav:home")))
+
+
 # --------------------------------------------------------------------------- #
 # Home
 # --------------------------------------------------------------------------- #
@@ -221,6 +322,7 @@ def home(
                 InlineKeyboardButton(text="📊 Activity", callback_data="nav:activity"),
                 InlineKeyboardButton(text="🔄 Refresh", callback_data="nav:home"),
             ],
+            [InlineKeyboardButton(text="ℹ️ About", callback_data="nav:about")],
             # Only operators see this, and only they can reach the handler —
             # hiding the button is presentation, the middleware is the gate.
             [
@@ -263,6 +365,14 @@ PANEL_EMOJI: tuple[str, ...] = tuple(
             "🔄",
             "▶️",
             "🔥",
+            "🏘",
+            "ℹ️",
+            "🔔",
+            "🔤",
+            "⚡",
+            "🚶",
+            "🐢",
+            "📥",
         ]
     )
 )

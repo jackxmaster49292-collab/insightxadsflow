@@ -150,6 +150,34 @@ class Settings(BaseSettings):
     #: customer's, so the floor protects them rather than us.
     min_broadcast_repeat_s: int = 3600
 
+    # --- Public identity ----------------------------------------------------
+    #: The one line Telegram shows on the bot's profile and beside a shared
+    #: link. 120 characters is Telegram's ceiling for it.
+    bot_short_description: str = (
+        "Create, schedule and track Telegram group advertisements from one place."
+    )
+    #: Links surfaced on the About screen and appended to the profile
+    #: description. Empty means "no such channel yet" and the button simply does
+    #: not appear — a dead link is worse than a missing one.
+    support_url: str = ""
+    updates_url: str = ""
+    privacy_url: str = ""
+    terms_url: str = ""
+
+    @property
+    def public_links(self) -> list[tuple[str, str]]:
+        """(label, url) for every link that is actually configured."""
+        return [
+            (label, url)
+            for label, url in (
+                ("Support", self.support_url),
+                ("Updates", self.updates_url),
+                ("Privacy", self.privacy_url),
+                ("Terms", self.terms_url),
+            )
+            if url
+        ]
+
     # --- Auto-reply ---------------------------------------------------------
     #: How long before the same person may receive another automatic reply.
     #: Not a throttle for our benefit — it is what keeps a reply from becoming

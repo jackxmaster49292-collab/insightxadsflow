@@ -187,6 +187,10 @@ class User(Base, TimestampMixin):
     broadcasts_sent: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    #: When this person asked to be told the publisher side had opened. Kept as
+    #: a timestamp rather than a flag so the operator can see *demand over
+    #: time*, which is the only thing that would justify building it.
+    publisher_interest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Nullable: a Telegram-only account never sets a password.
     password_hash: Mapped[str | None] = mapped_column(Text)
 
