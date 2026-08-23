@@ -29,9 +29,11 @@ FIRE_ID = "5368324170671202286"
 def _plain_icons():
     """Every test starts with plain icons and a clean send recorder."""
     premium_icons.set_map({})
+    premium_icons.set_labels({})
     Sent.reset()
     yield
     premium_icons.set_map({})
+    premium_icons.set_labels({})
 
 
 @pytest.fixture
@@ -204,7 +206,7 @@ async def test_an_operator_extracts_ids_from_their_own_account(client, actor, st
         script.custom_emoji[emoticon] = [f"55{abs(hash(emoticon)) % 10**15}"]
 
     await handlers.op_emoji(
-        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), is_operator=True
+        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), state=state, is_operator=True
     )
 
     stored = await panel_emoji_repo.get_map(session)
@@ -218,7 +220,7 @@ async def test_extraction_is_operator_only(client, actor, state, session):
     from app.adminbot import handlers
 
     await handlers.op_emoji(
-        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), is_operator=False
+        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), state=state, is_operator=False
     )
     assert await panel_emoji_repo.get_map(session) == {}
     assert any("not available" in alert for alert in Sent.alerts)
@@ -231,7 +233,7 @@ async def test_extraction_needs_a_user_connection(client, actor, state):
 
     await connect_bot(actor)
     await handlers.op_emoji(
-        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), is_operator=True
+        a_callback("op:emoji:run"), user_id=uuid.UUID(actor.id), state=state, is_operator=True
     )
     assert any("Connect a Telegram account" in alert for alert in Sent.alerts)
 
@@ -244,7 +246,7 @@ async def test_turning_it_off_clears_the_map(client, actor, state, session):
     await session.commit()
 
     await handlers.op_emoji(
-        a_callback("op:emoji:off"), user_id=uuid.UUID(actor.id), is_operator=True
+        a_callback("op:emoji:off"), user_id=uuid.UUID(actor.id), state=state, is_operator=True
     )
 
     assert await panel_emoji_repo.get_map(session) == {}
@@ -266,7 +268,7 @@ def test_the_status_screen_tells_the_fragment_truth():
     empty = views.premium_icons_status(
         extracted={}, live=False, suspended=False, has_user_connection=False
     )
-    assert "connect one under" in empty.text
+    assert "needs no login at all" in empty.text, "the send-emojis path is offered first"
     assert_valid_markdown_v2(empty.text)
 
 
@@ -274,3 +276,162 @@ def handlers_message(text):
     from tests.integration.test_bot_flows import a_message
 
     return a_message(text)
+
+
+# --------------------------------------------------------------------------- #
+# Extraction by just sending emojis — no login, no connection
+# --------------------------------------------------------------------------- #
+def _premium_message(text: str, emoji_ids: dict[str, str]):
+    """A message whose premium emojis carry entities at true UTF-16 offsets."""
+    from aiogram.types import MessageEntity
+
+    from tests.integration.test_bot_flows import a_message
+
+    entities = []
+    for char, custom_id in emoji_ids.items():
+        python_index = text.index(char)
+        offset = len(text[:python_index].encode("utf-16-le")) // 2
+        length = len(char.encode("utf-16-le")) // 2
+        entities.append(
+            MessageEntity(
+                type="custom_emoji", offset=offset, length=length, custom_emoji_id=custom_id
+            )
+        )
+    message = a_message(text)
+    return message.model_copy(update={"entities": entities})
+
+
+def test_utf16_offsets_map_the_right_character():
+    """An emoji is a surrogate pair in UTF-16 — slicing by Python index maps
+    the wrong character, which would draw someone's flame on the ✅ icon."""
+    from app.adminbot.handlers import _custom_emoji_pairs
+
+    # Two astral-plane emoji before the target shift Python and UTF-16 apart.
+    message = _premium_message("🔥🔥 then ✅ done", {"🔥": "111", "✅": "222"})
+    pairs = _custom_emoji_pairs(message)
+    assert pairs == {"🔥": "111", "✅": "222"}
+
+
+async def test_the_operator_can_extract_by_just_sending_emojis(client, actor, state, session):
+    """No login and no connected account: the ids ride in on the message
+    itself, because a custom emoji is a character plus an entity naming it."""
+    from app.adminbot import handlers
+    from app.adminbot.states import IconSetup
+
+    await handlers.op_emoji(
+        a_callback("op:emoji:send"), user_id=uuid.UUID(actor.id), state=state, is_operator=True
+    )
+    assert await state.get_state() == IconSetup.collect.state
+
+    await handlers.icon_collect(
+        _premium_message("🔥 ✅", {"🔥": "555", "✅": "666"}),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+    )
+
+    stored = await panel_emoji_repo.get_map(session)
+    assert stored == {"🔥": "555", "✅": "666"}
+    assert premium_icons.enabled()
+    assert "2 icons mapped" in Sent.last()
+
+    # A second message merges rather than replaces.
+    await handlers.icon_collect(
+        _premium_message("⚠️", {"⚠️": "777"}), user_id=uuid.UUID(actor.id), state=state
+    )
+    stored = await panel_emoji_repo.get_map(session)
+    assert stored == {"🔥": "555", "✅": "666", "⚠️": "777"}
+
+
+async def test_a_plain_emoji_message_is_explained_not_saved(client, actor, state, session):
+    """Keyboard emoji without entities carry no id — saying so beats silence."""
+    from app.adminbot import handlers
+    from app.adminbot.states import IconSetup
+    from tests.integration.test_bot_flows import a_message
+
+    await state.set_state(IconSetup.collect)
+    await handlers.icon_collect(a_message("🔥 ✅"), user_id=uuid.UUID(actor.id), state=state)
+
+    assert await panel_emoji_repo.get_map(session) == {}
+    assert "No premium emoji" in Sent.last()
+
+
+# --------------------------------------------------------------------------- #
+# Renaming buttons
+# --------------------------------------------------------------------------- #
+async def test_an_operator_renames_a_button_and_it_comes_from_the_database(
+    client, actor, state, session
+):
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:pick:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    from tests.integration.test_bot_flows import a_message
+
+    await handlers.button_label(a_message("🚀 Campaigns"), user_id=uuid.UUID(actor.id), state=state)
+
+    assert await panel_buttons_repo.get_map(session) == {"📣 Ads": "🚀 Campaigns"}
+    assert premium_icons.get_labels() == {"📣 Ads": "🚀 Campaigns"}
+
+    # And the home screen now carries it.
+    Sent.reset()
+    await handlers.start(a_message("/start"), user_id=uuid.UUID(actor.id), state=state)
+    labels = [b.text for row in Sent.messages[-1][1].inline_keyboard for b in row]
+    assert "🚀 Campaigns" in labels
+    assert "📣 Ads" not in labels
+
+    # `-` goes back to the built-in.
+    await handlers.op_buttons(
+        a_callback(f"op:btn:pick:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_label(a_message("-"), user_id=uuid.UUID(actor.id), state=state)
+    assert await panel_buttons_repo.get_map(session) == {}
+
+
+async def test_renaming_is_operator_only(client, actor, state, session):
+    from app.adminbot import handlers
+
+    await handlers.op_buttons(
+        a_callback("op:btn:pick:0"), user_id=uuid.UUID(actor.id), state=state, is_operator=False
+    )
+    assert any("not available" in alert for alert in Sent.alerts)
+
+
+def test_labels_apply_before_icons_so_both_compose():
+    """The rename key is the plain default; the icon pass then upgrades the
+    renamed label's own leading emoji. Order the other way, the key would
+    never match."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_labels({"📣 Ads": "🔥 Campaigns"})
+    premium_icons.set_map({"🔥": "999"})
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    renamed = premium_icons.apply_labels(markup)
+    final = premium_icons.apply_keyboard(renamed)
+    button = final.inline_keyboard[0][0]
+    assert button.text == "Campaigns"
+    assert button.icon_custom_emoji_id == "999"
+    premium_icons.set_labels({})
+
+
+def test_a_custom_label_is_part_of_the_plain_retry():
+    """Only premium icons ever fall back — a rename is plain text and stays."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_labels({"📣 Ads": "Campaigns"})
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    labelled = premium_icons.apply_labels(markup)
+    assert labelled.inline_keyboard[0][0].text == "Campaigns"
+    premium_icons.set_labels({})

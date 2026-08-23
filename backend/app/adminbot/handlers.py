@@ -35,6 +35,8 @@ from app.adminbot.states import (
     ConnectAccount,
     ConnectBot,
     EditAutoReply,
+    EditButton,
+    IconSetup,
 )
 from app.config import get_settings
 from app.db.models import (
@@ -52,6 +54,7 @@ from app.repositories import chats as chat_repo
 from app.repositories import connections as connection_repo
 from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
+from app.repositories import panel_buttons as panel_buttons_repo
 from app.repositories import panel_emoji as panel_emoji_repo
 from app.repositories import rules as rule_repo
 from app.repositories import users as user_repo
@@ -91,10 +94,15 @@ async def _deliver(send, text: str, markup=None) -> None:  # type: ignore[no-unt
     icons are suspended and the plain version goes out instead. A degraded
     icon is a shrug; a blank panel is an outage.
     """
+    # Labels first: their keys are the built-in defaults, and the icon pass
+    # would strip the leading emoji those keys contain. A renamed label is
+    # plain text from the database and carries no rejection risk, so it is
+    # part of the plain retry too — only the premium icons ever fall back.
+    labelled = premium_icons.apply_labels(markup)
     styled = premium_icons.apply(text)
-    styled_markup = premium_icons.apply_keyboard(markup)
-    if styled == text and styled_markup is markup:
-        await send(text, markup)
+    styled_markup = premium_icons.apply_keyboard(labelled)
+    if styled == text and styled_markup is labelled:
+        await send(text, labelled)
         return
     try:
         await send(styled, styled_markup)
@@ -103,7 +111,7 @@ async def _deliver(send, text: str, markup=None) -> None:  # type: ignore[no-unt
             raise
         log.warning("premium_icons_rejected", error=str(exc))
         premium_icons.suspend()
-        await send(text, markup)
+        await send(text, labelled)
 
 
 async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None:
@@ -1892,7 +1900,11 @@ async def _emoji_status_screen(user_id: uuid.UUID) -> views.Screen:
 
 @router.callback_query(F.data.startswith("op:emoji"))
 async def op_emoji(
-    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+    query: CallbackQuery,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
 ) -> None:
     if not await _require_operator(query, is_operator):
         return
@@ -1911,6 +1923,20 @@ async def op_emoji(
         premium_icons.set_map({})
         await _render(query, await _emoji_status_screen(user_id))
         await query.answer("Plain icons.")
+        return
+
+    if action == "send":
+        await state.clear()
+        await state.set_state(IconSetup.collect)
+        if isinstance(query.message, Message):
+            await _ask(
+                query.message,
+                "Send me the premium emoji you want the panel to use — one "
+                "message, as many as you like\\. I read the ids straight from "
+                "the message; nothing connects and nothing logs in\\. "
+                "/cancel when done\\.",
+            )
+        await query.answer()
         return
 
     if action == "run":
@@ -1962,6 +1988,136 @@ async def op_emoji(
 
     await _render(query, await _emoji_status_screen(user_id))
     await query.answer()
+
+
+def _custom_emoji_pairs(message: Message) -> dict[str, str]:
+    """(character → custom_emoji_id) for every premium emoji in a message.
+
+    Offsets are UTF-16 code units — Telegram's counting, not Python's — and an
+    emoji is itself a surrogate pair there, so the text is sliced in UTF-16
+    bytes rather than by Python index. Getting this wrong maps the *wrong
+    character* to an id, which would draw someone's flame on the ✅ icon.
+    """
+    pairs: dict[str, str] = {}
+    text = message.text or message.caption or ""
+    raw = text.encode("utf-16-le")
+    for entity in message.entities or message.caption_entities or []:
+        if entity.type == "custom_emoji" and entity.custom_emoji_id:
+            char = raw[entity.offset * 2 : (entity.offset + entity.length) * 2].decode("utf-16-le")
+            pairs[char] = entity.custom_emoji_id
+    return pairs
+
+
+@router.message(IconSetup.collect)
+async def icon_collect(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    pairs = _custom_emoji_pairs(message)
+    if not pairs:
+        await _ask(
+            message,
+            "No premium emoji in that message\\. Pick them from the *animated* "
+            "rows of your emoji keyboard — a plain keyboard emoji carries no "
+            "id\\. Send more, or /cancel\\.",
+        )
+        return
+
+    async with session_scope() as session:
+        merged = await panel_emoji_repo.get_map(session)
+        merged.update(pairs)
+        await panel_emoji_repo.replace(session, mapping=merged)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="panel_emoji.collect",
+            object_type="panel_emoji",
+            payload={"added": len(pairs), "total": len(merged)},
+        )
+    premium_icons.set_map(merged)
+
+    await _ask(
+        message,
+        f"Got {len(pairs)} — {len(merged)} icons mapped now\\. Send more, or /cancel to finish\\.",
+    )
+
+
+@router.callback_query(F.data.startswith("op:btn"))
+async def op_buttons(
+    query: CallbackQuery,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
+) -> None:
+    if not await _require_operator(query, is_operator):
+        return
+    parts = (query.data or "").split(":")
+
+    if len(parts) >= 4 and parts[2] == "pick" and parts[3].isdigit():
+        index = int(parts[3])
+        if index >= len(views.RENAMEABLE_BUTTONS):
+            await query.answer("Unknown button.", show_alert=True)
+            return
+        default = views.RENAMEABLE_BUTTONS[index]
+        await state.clear()
+        await state.set_state(EditButton.text)
+        await state.update_data(button_index=index)
+        if isinstance(query.message, Message):
+            await _ask(
+                query.message,
+                f"New label for *{views.escape(default)}* — up to 32 characters\\. "
+                "Send `-` for the built\\-in label\\.",
+            )
+        await query.answer()
+        return
+
+    page = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
+    async with session_scope() as session:
+        custom = await panel_buttons_repo.get_map(session)
+    await _render(query, views.panel_buttons_list(custom=custom, page=page))
+    await query.answer()
+
+
+@router.message(EditButton.text)
+async def button_label(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    data = await state.get_data()
+    index = data.get("button_index")
+    if not isinstance(index, int) or index >= len(views.RENAMEABLE_BUTTONS):
+        await state.clear()
+        await _go_home(message, user_id)
+        return
+    default = views.RENAMEABLE_BUTTONS[index]
+
+    label = (message.text or "").strip()
+    if label != "-" and not (1 <= len(label) <= 32):
+        await _ask(message, "Between 1 and 32 characters, or `-` to reset\\.")
+        return
+    if "\n" in label:
+        await _ask(message, "One line — a button has no second one\\.")
+        return
+
+    async with session_scope() as session:
+        if label == "-":
+            await panel_buttons_repo.reset_label(session, default_text=default)
+        else:
+            await panel_buttons_repo.set_label(session, default_text=default, custom_text=label)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="panel_button.rename",
+            object_type="panel_button",
+            object_id=default,
+            payload={"custom": None if label == "-" else label},
+        )
+        custom = await panel_buttons_repo.get_map(session)
+    premium_icons.set_labels(custom)
+
+    await state.clear()
+    await _send(
+        message, views.panel_buttons_list(custom=custom, page=index // views.BUTTONS_PAGE_SIZE)
+    )
 
 
 # --------------------------------------------------------------------------- #

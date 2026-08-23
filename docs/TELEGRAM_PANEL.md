@@ -231,6 +231,21 @@ premium owner is enough here. If Telegram refuses anyway, the panel quietly
 falls back to plain icons rather than breaking, and the ✨ Icons screen says
 that is what happened; extract again after fixing the cause and it retries.
 
+**The simplest way needs no login**: tap **📥 Send emojis** and send the
+premium emoji from your own keyboard — one message, as many as you like, and
+more messages add more. The ids ride in on the message itself, so nothing
+connects and nothing signs in. (Your own account can never be *connected*
+from this chat — Telegram burns any login code it sees an account send — but
+sending emoji is just a message.) The account-search path still exists for
+operators who do have a connected account.
+
+### Renaming buttons (operators)
+
+**🔤 Buttons** on the operator home lists every renameable button label. Tap
+one, send the new text (up to 32 characters, one line), and it changes
+everywhere that button appears — stored in the database, surviving restarts.
+Send `-` while renaming to go back to the built-in label.
+
 ### Why it goes group by group
 
 Posting pauses between groups — 3 seconds by default, changeable with **⏱

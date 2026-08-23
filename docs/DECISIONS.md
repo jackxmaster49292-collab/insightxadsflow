@@ -617,6 +617,29 @@ icons — text and buttons — should render premium with no Fragment purchase.
 Verification of a claim against the installed API, not against memory, is what
 settled this; memory said no and was out of date.
 
+### ADR-049 — Icons arrive by message, and button labels live in the database
+**Context.** The ✨ Icons screen demanded a connected account for extraction —
+but the account an operator drives the bot from cannot connect itself
+(ADR-036: Telegram burns any login code it sees an account send in a chat), so
+a solo operator was locked out of their own feature. Separately, the operator
+asked for every button label to be editable, stored in the database.
+**Decision.** *Icons:* a second extraction path that needs no login and no
+connection — the operator taps 📥 Send emojis and sends premium emoji from
+their own keyboard. A custom emoji is a character plus an entity naming the
+premium document, so the ids ride in on the message itself; the collector
+slices characters by **UTF-16 offsets** (Telegram's counting — an emoji is a
+surrogate pair there, and slicing by Python index would map the wrong
+character). Messages merge, so icons can be added over several sends.
+*Labels:* a ``panel_buttons`` table keyed by the built-in default text — the
+one identity a button keeps across forty screens. 🔤 Buttons lists every
+renameable label; the transform swaps exact matches centrally in the send
+path, before the premium-icon pass (whose stripping would otherwise break the
+keys). ``-`` resets to the built-in.
+**Consequence.** No row means the built-in label — a default, not a fallback;
+custom labels are plain text with no rejection risk, so they persist through
+the premium-icon fallback and only the icons ever degrade. The renameable list
+is append-only, because callbacks carry indexes into it.
+
 ---
 
 ## Open tradeoffs

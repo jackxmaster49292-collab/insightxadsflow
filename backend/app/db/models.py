@@ -920,6 +920,25 @@ class PanelEmoji(Base):
     )
 
 
+class PanelButton(Base):
+    """An operator's custom label for one panel button.
+
+    Keyed by the built-in default text, because that is the one stable identity
+    a button has — callback data carries per-object ids, and screens are built
+    in forty places. A row overrides the default wherever that button appears;
+    no row means the built-in label, which is a default, not a fallback: the
+    built-ins are the product's own wording, not an error state.
+    """
+
+    __tablename__ = "panel_buttons"
+
+    default_text: Mapped[str] = mapped_column(String(64), primary_key=True)
+    custom_text: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

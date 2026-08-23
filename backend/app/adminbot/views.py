@@ -226,6 +226,7 @@ def home(
             [
                 InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0"),
                 InlineKeyboardButton(text="✨ Icons", callback_data="op:emoji"),
+                InlineKeyboardButton(text="🔤 Buttons", callback_data="op:btn:0"),
             ]
             if is_operator
             else [],
@@ -311,19 +312,23 @@ def premium_icons_status(
         "because the bot sends them directly\\. If Telegram refuses, the panel "
         "quietly stays plain rather than breaking\\.",
     ]
-    if not has_user_connection:
-        lines += [
-            "",
-            "Extraction needs a connected *account* \\(not a bot\\) to search "
-            "with — connect one under *Accounts* first\\.",
-        ]
+    lines += [
+        "",
+        "*The simplest way needs no login at all*: tap *Send emojis* and send "
+        "me the premium emoji from your own keyboard — one message, as many as "
+        "you like\\. Each one you send replaces the matching plain icon\\. "
+        "Your own account cannot be *connected* from this chat \\(Telegram "
+        "burns any login code it sees an account send\\), but sending emoji "
+        "is just a message — nothing to connect\\.",
+    ]
 
     return Screen(
         "\n".join(lines),
         _rows(
+            [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
             [
                 InlineKeyboardButton(
-                    text="🔁 Extract again" if extracted else "✨ Extract now",
+                    text="🔁 Extract again" if extracted else "✨ Extract via account",
                     callback_data="op:emoji:run",
                 )
             ]
@@ -332,6 +337,74 @@ def premium_icons_status(
             [InlineKeyboardButton(text="🚫 Turn off", callback_data="op:emoji:off")]
             if extracted
             else [],
+            _back("nav:home"),
+        ),
+    )
+
+
+#: Every static button label an operator may rename. The order is the order
+#: shown; the *index* is what callbacks carry, so this list is append-only —
+#: reordering it would re-point saved callbacks at the wrong button.
+RENAMEABLE_BUTTONS: tuple[str, ...] = (
+    "📣 Ads",
+    "💬 Auto-reply",
+    "📋 Forwarding",
+    "🔗 Accounts",
+    "💭 Groups",
+    "📊 Activity",
+    "🔄 Refresh",
+    "🏠 Home",
+    "➕ New ad",
+    "➕ New rule",
+    "➕ Add account",
+    "➕ Add bot",
+    "✏️ Message",
+    "🖼 Image",
+    "⏱ Pause",
+    "🔁 Repeat",
+    "🚀 Send now",
+    "⏸ Pause",
+    "▶️ Resume",
+    "🚫 Stop",
+    "🗑 Discard",
+    "🧾 Groups",
+    "📊 Events",
+    "✏️ Edit",
+    "⬅️ Back",
+    "✅ Done",
+)
+
+BUTTONS_PAGE_SIZE = 8
+
+
+def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
+    """Every renameable button, with its current label beside the default."""
+    window, page, pages = _page_of(RENAMEABLE_BUTTONS, page, BUTTONS_PAGE_SIZE)
+    offset = page * BUTTONS_PAGE_SIZE
+
+    lines = [
+        "🔤 *Button labels*",
+        "",
+        "Tap a button to rename it everywhere it appears\\. The label is "
+        "stored in the database and survives restarts\\. Send `-` while "
+        "renaming to go back to the built\\-in label\\.",
+        "",
+    ]
+    rows = []
+    for i, default in enumerate(window):
+        current = custom.get(default)
+        shown = f"{default} → {current}" if current else default
+        rows.append(
+            [InlineKeyboardButton(text=shown[:56], callback_data=f"op:btn:pick:{offset + i}")]
+        )
+    if custom:
+        lines.append(f"*Renamed* — {len(custom)}")
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *rows,
+            _pager("op:btn:", page, pages),
             _back("nav:home"),
         ),
     )

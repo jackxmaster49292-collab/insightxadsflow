@@ -29,6 +29,9 @@ _lock = threading.Lock()
 _map: dict[str, str] = {}
 _suspended = False
 
+#: Operator-customized button labels, keyed by the built-in default text.
+_labels: dict[str, str] = {}
+
 #: One custom-emoji token, for stripping a rejected message back to plain.
 _TOKEN = re.compile(r"!\[([^\]]+)\]\(tg://emoji\?id=\d+\)")
 
@@ -90,6 +93,50 @@ def apply(text: str) -> str:
 def strip(text: str) -> str:
     """Back to plain emoji — the exact inverse of :func:`apply`."""
     return _TOKEN.sub(r"\1", text)
+
+
+def set_labels(mapping: dict[str, str]) -> None:
+    with _lock:
+        _labels.clear()
+        _labels.update(mapping)
+
+
+def get_labels() -> dict[str, str]:
+    with _lock:
+        return dict(_labels)
+
+
+def apply_labels(markup: Any) -> Any:
+    """A copy of ``markup`` with the operator's custom button labels.
+
+    Exact match on the built-in default text — the one identity a button keeps
+    across screens. Runs *before* the premium-icon pass, so a label key is
+    always the plain default the operator saw when renaming, never a half-
+    transformed one. Custom labels are plain text straight from the database;
+    there is no failure mode to fall back from.
+    """
+    if markup is None or not _labels:
+        return markup
+    from aiogram.types import InlineKeyboardMarkup
+
+    with _lock:
+        labels = dict(_labels)
+
+    changed = False
+    rows = []
+    for row in markup.inline_keyboard:
+        buttons = []
+        for button in row:
+            custom = labels.get(button.text)
+            if custom is None:
+                buttons.append(button)
+                continue
+            changed = True
+            buttons.append(button.model_copy(update={"text": custom}))
+        rows.append(buttons)
+    if not changed:
+        return markup
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def apply_keyboard(markup: Any) -> Any:

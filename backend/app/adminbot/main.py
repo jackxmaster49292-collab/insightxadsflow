@@ -28,6 +28,7 @@ from app.adminbot.handlers import router
 from app.config import get_settings
 from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
+from app.repositories import panel_buttons as panel_buttons_repo
 from app.repositories import panel_emoji as panel_emoji_repo
 from app.security.ratelimit import close_redis
 
@@ -127,6 +128,7 @@ async def run() -> None:
         # the first screen renders so the panel does not flicker plain→premium.
         async with session_scope() as session:
             premium_icons.set_map(await panel_emoji_repo.get_map(session))
+            premium_icons.set_labels(await panel_buttons_repo.get_map(session))
 
         await _register_commands(bot)
         alerts = asyncio.create_task(notifier.run(bot, _stop))

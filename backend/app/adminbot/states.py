@@ -51,3 +51,15 @@ class ComposeRule(StatesGroup):
 class EditAutoReply(StatesGroup):
     text = State()
     cooldown = State()
+
+
+class IconSetup(StatesGroup):
+    #: The operator is sending premium emojis for the panel to adopt. Each
+    #: message's custom-emoji entities are read off it; /cancel ends it.
+    collect = State()
+
+
+class EditButton(StatesGroup):
+    #: Waiting for the new label. The chosen default's index into
+    #: ``views.RENAMEABLE_BUTTONS`` sits in state data under "button_index".
+    text = State()
