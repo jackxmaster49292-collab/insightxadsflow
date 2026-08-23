@@ -521,7 +521,32 @@ def ads_list(*, broadcasts: Sequence[Broadcast], page: int, can_create: bool) ->
     )
 
 
-def ad_compose(*, broadcast: Broadcast, target_count: int, estimate_s: float) -> Screen:
+def premium_emoji_warning(*, has_premium_emoji: bool, account_is_premium: bool) -> list[str]:
+    """Said before sending, not discovered afterwards.
+
+    A custom emoji is an ordinary emoji character in the text plus an entity
+    naming the premium one to draw. Telegram honours that entity only for a
+    Telegram Premium account, so without it the ad arrives showing the fallback
+    characters — which looks like a bug in this tool and is not one.
+    """
+    if not has_premium_emoji or account_is_premium:
+        return []
+    return [
+        "",
+        "⚠️ *This ad uses premium emoji, and this account is not Telegram Premium\\.*",
+        "",
+        "_They will arrive as ordinary emoji\\. Subscribe on the posting "
+        "account, or replace them — everything else posts exactly as written\\._",
+    ]
+
+
+def ad_compose(
+    *,
+    broadcast: Broadcast,
+    target_count: int,
+    estimate_s: float,
+    account_is_premium: bool = True,
+) -> Screen:
     """The draft screen. Every field stays editable until Send is tapped."""
     has_media = broadcast.media_kind.value != "none"
     body = broadcast.body_text.strip()
@@ -532,6 +557,15 @@ def ad_compose(*, broadcast: Broadcast, target_count: int, estimate_s: float) ->
         "*Message*",
         f"_{escape(body[:400])}_" if body else "_not written yet_",
     ]
+    if _has_premium_emoji(broadcast):
+        # The preview is plain text, and this bot could not render a custom
+        # emoji even if it tried — the Bot API reserves those for bots with a
+        # Fragment username. Saying so stops the preview reading as the result.
+        lines += [
+            "",
+            "_The preview above is plain text, so premium emoji show as ordinary "
+            "ones here\\. The posted ad keeps them\\._",
+        ]
     if len(body) > 400:
         lines.append(f"_…and {len(body) - 400} more characters_")
 
@@ -543,6 +577,11 @@ def ad_compose(*, broadcast: Broadcast, target_count: int, estimate_s: float) ->
     ]
     if target_count:
         lines.append(f"*Takes about* — {escape(humanize(estimate_s))}")
+
+    lines += premium_emoji_warning(
+        has_premium_emoji=_has_premium_emoji(broadcast),
+        account_is_premium=account_is_premium,
+    )
 
     ready = bool(body or has_media) and target_count > 0
     if not ready:
@@ -578,16 +617,33 @@ def ad_compose(*, broadcast: Broadcast, target_count: int, estimate_s: float) ->
     )
 
 
-def ad_confirm(*, broadcast: Broadcast, target_count: int, estimate_s: float) -> Screen:
+def _has_premium_emoji(broadcast: Broadcast) -> bool:
+    return any(e.get("type") == "custom_emoji" for e in broadcast.body_entities or [])
+
+
+def ad_confirm(
+    *,
+    broadcast: Broadcast,
+    target_count: int,
+    estimate_s: float,
+    account_is_premium: bool = True,
+) -> Screen:
     has_media = broadcast.media_kind.value != "none"
     preview = broadcast.body_text.strip()[:300] or "(image only)"
+    warning = "\n".join(
+        premium_emoji_warning(
+            has_premium_emoji=_has_premium_emoji(broadcast),
+            account_is_premium=account_is_premium,
+        )
+    )
     return Screen(
         "🚀 *Send this ad?*\n\n"
         f"_{escape(preview)}_\n\n"
         f"*To* — {target_count} groups\n"
         f"*Image* — {'yes' if has_media else 'no'}\n"
         f"*Pause between groups* — {seconds_label(broadcast.delay_ms)}\n"
-        f"*Takes about* — {escape(humanize(estimate_s))}\n\n"
+        f"*Takes about* — {escape(humanize(estimate_s))}\n"
+        f"{warning}\n\n"
         "It posts only to groups this account has already joined\\. "
         "You can pause it once it starts, but messages already posted cannot "
         "be unsent\\.",
@@ -720,9 +776,12 @@ def group_picker(
                 *buttons,
                 _pager(f"{PICK}p", page, pages),
                 [
-                    InlineKeyboardButton(text="Select page", callback_data=f"{PICK}a{page}"),
+                    InlineKeyboardButton(
+                        text=f"✅ Select all {len(chats)}", callback_data=f"{PICK}A"
+                    ),
                     InlineKeyboardButton(text="Clear all", callback_data=f"{PICK}n{page}"),
                 ],
+                [InlineKeyboardButton(text="Select page", callback_data=f"{PICK}a{page}")],
                 [InlineKeyboardButton(text="✅ Done", callback_data=done_callback)],
             ]
         ),

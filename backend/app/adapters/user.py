@@ -194,6 +194,7 @@ class UserAdapter:
             account_id=int(me.id),
             username=getattr(me, "username", None),
             session_string=self.session_string,
+            premium=bool(getattr(me, "premium", False)),
         )
 
     async def start_login(self, phone: str) -> str:
@@ -224,6 +225,7 @@ class UserAdapter:
             account_id=int(me.id),
             username=getattr(me, "username", None),
             session_string=self.session_string,
+            premium=bool(getattr(me, "premium", False)),
         )
 
     async def complete_2fa(self, password: str) -> ConnectionState:
@@ -236,6 +238,7 @@ class UserAdapter:
             account_id=int(me.id),
             username=getattr(me, "username", None),
             session_string=self.session_string,
+            premium=bool(getattr(me, "premium", False)),
         )
 
     async def disconnect(self, *, revoke: bool = False) -> None:
@@ -253,7 +256,10 @@ class UserAdapter:
         except Exception as exc:
             return HealthReport(healthy=False, reason_code=classify_error(exc).code)
         return HealthReport(
-            healthy=True, account_id=int(me.id), username=getattr(me, "username", None)
+            healthy=True,
+            account_id=int(me.id),
+            username=getattr(me, "username", None),
+            premium=bool(getattr(me, "premium", False)),
         )
 
     # --- discovery ------------------------------------------------------- #

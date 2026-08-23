@@ -814,6 +814,7 @@ def a_broadcast(status):
         name="Ad",
         status=status,
         body_text="hello",
+        body_entities=[],
         media_kind=SimpleNamespace(value="none"),
         delay_ms=3000,
         paused_reason_code=None,

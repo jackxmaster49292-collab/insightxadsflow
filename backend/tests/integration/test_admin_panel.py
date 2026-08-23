@@ -314,6 +314,7 @@ def test_every_button_the_screens_emit_fits_the_limit():
         name="Ad",
         status=BroadcastStatus.draft,
         body_text="hello",
+        body_entities=[],
         media_kind=SimpleNamespace(value="none"),
         delay_ms=3000,
         paused_reason_code=None,

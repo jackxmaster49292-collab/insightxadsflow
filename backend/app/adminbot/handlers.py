@@ -1052,12 +1052,19 @@ async def ad_actions(
 
         target_ids = await broadcast_repo.target_chat_ids(session, broadcast_id=broadcast.id)
         estimate = broadcast_service.estimated_duration_s(broadcast.delay_ms, len(target_ids))
+        owner_connection = await connection_repo.get(
+            session, user_id=user_id, connection_id=broadcast.connection_id
+        )
+        is_premium = bool(owner_connection and owner_connection.is_premium)
 
         if action == "confirm":
             await _render(
                 query,
                 views.ad_confirm(
-                    broadcast=broadcast, target_count=len(target_ids), estimate_s=estimate
+                    broadcast=broadcast,
+                    target_count=len(target_ids),
+                    estimate_s=estimate,
+                    account_is_premium=is_premium,
                 ),
             )
             await query.answer()
@@ -1126,7 +1133,10 @@ async def ad_actions(
 
         if broadcast.status is BroadcastStatus.draft:
             screen = views.ad_compose(
-                broadcast=broadcast, target_count=len(target_ids), estimate_s=estimate
+                broadcast=broadcast,
+                target_count=len(target_ids),
+                estimate_s=estimate,
+                account_is_premium=is_premium,
             )
         else:
             screen = views.ad_detail(
@@ -1240,6 +1250,10 @@ async def picker_actions(
         selected ^= {chat_ids[number]}
     elif verb == "p" and number is not None:
         page = number
+    elif verb == "A":
+        # Every group, not just the visible page. With 157 groups over 20 pages
+        # the page-at-a-time button was twenty taps.
+        selected |= set(chat_ids)
     elif verb == "a" and number is not None:
         page = number
         selected |= set(

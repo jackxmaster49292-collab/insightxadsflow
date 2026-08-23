@@ -116,6 +116,9 @@ class HealthReport:
     reason_code: str = "ok"
     account_id: int | None = None
     username: str | None = None
+    #: Telegram Premium. Only a premium account may send custom emoji, so this
+    #: decides whether an ad written with them will render as intended.
+    premium: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +170,8 @@ class ConnectionState:
     username: str | None = None
     #: New session material to persist, if the flow produced any.
     session_string: str | None = None
+    #: Telegram Premium — see HealthReport.premium.
+    premium: bool = False
 
 
 @dataclass(slots=True)

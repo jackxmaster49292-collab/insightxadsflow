@@ -15,7 +15,7 @@ import uuid
 from sqlalchemy import select
 
 from app.adapters.base import TextEntity
-from app.db.models import Broadcast, BroadcastMedia
+from app.db.models import Broadcast, BroadcastMedia, BroadcastStatus
 from app.services import broadcast as broadcast_service
 from tests.conftest import connect_bot, discovered, script_for, sync_with_chats
 from tests.integration.test_broadcast import build_broadcast, drain
@@ -373,3 +373,132 @@ async def test_composing_an_ad_stores_the_formatting_telegram_reported(client, a
             "custom_emoji_id": "5368324170671202286",
         },
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Premium emoji need a premium account, and the panel says so first
+# --------------------------------------------------------------------------- #
+def test_a_non_premium_account_is_warned_before_sending():
+    """Custom emoji arrive as ordinary ones without Telegram Premium. Finding
+    that out from 157 posted ads is the wrong way to learn it."""
+    from app.adminbot import views
+
+    warning = views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=False)
+    text = "\n".join(warning)
+
+    assert "not Telegram Premium" in text
+    assert "arrive as ordinary emoji" in text
+    assert "everything else posts exactly as written" in text, (
+        "the rest of the formatting does work, and saying so avoids a false alarm"
+    )
+
+
+def test_a_premium_account_is_not_warned():
+    from app.adminbot import views
+
+    assert views.premium_emoji_warning(has_premium_emoji=True, account_is_premium=True) == []
+
+
+def test_an_ad_without_premium_emoji_is_not_warned():
+    from app.adminbot import views
+
+    assert views.premium_emoji_warning(has_premium_emoji=False, account_is_premium=False) == []
+
+
+def test_the_compose_screen_explains_why_its_own_preview_looks_plain():
+    """The preview is escaped plain text, and this bot could not render a custom
+    emoji even if it tried — the Bot API reserves those for bots with a Fragment
+    username. Without saying so, the preview reads as the result."""
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+
+    broadcast = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Sale",
+        status=BroadcastStatus.draft,
+        body_text="INSIGHT STORE",
+        body_entities=[{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"}],
+        media_kind=SimpleNamespace(value="none"),
+        delay_ms=3000,
+        paused_reason_code=None,
+    )
+    screen = views.ad_compose(
+        broadcast=broadcast, target_count=1, estimate_s=0, account_is_premium=True
+    )
+    assert "preview above is plain text" in screen.text
+    assert "The posted ad keeps them" in screen.text
+
+
+async def test_the_premium_flag_is_read_from_telegram(client, actor, session):
+    from app.db.models import TelegramConnection
+    from tests.conftest import script_for as script
+
+    connection_id = await connect_bot(actor)
+    script(connection_id).premium = True
+    await session.commit()
+
+    from app.services import connections as connection_service
+
+    connection = await session.get(TelegramConnection, uuid.UUID(connection_id))
+    await connection_service.run_health_check(session, connection=connection)
+
+    assert connection.is_premium is True
+
+
+# --------------------------------------------------------------------------- #
+# Select all
+# --------------------------------------------------------------------------- #
+def test_the_picker_offers_select_all_not_just_the_page():
+    """157 groups over 20 pages made "Select page" twenty taps."""
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+
+    chats = [SimpleNamespace(id=uuid.uuid4(), title=f"Group {i:03d}") for i in range(157)]
+    screen = views.group_picker(
+        chats=chats,
+        selected=set(),
+        page=0,
+        title="Choose groups",
+        hint="Tap to select.",
+        done_callback="ad:x",
+    )
+    labels = [b.text for row in screen.keyboard.inline_keyboard for b in row]
+    callbacks = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+
+    assert "✅ Select all 157" in labels, "the count belongs on the button"
+    assert f"{views.PICK}A" in callbacks
+    assert "Select page" in labels, "still useful when you want one page"
+
+
+async def test_select_all_selects_every_page(client, actor, session):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    from app.adminbot import handlers, views
+    from tests.integration.test_bot_flows import ADMIN_CHAT, a_callback, a_message
+
+    user_id = uuid.UUID(actor.id)
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [discovered(-1002000 - i, f"Group {i:03d}", chat_kind="supergroup") for i in range(20)],
+    )
+
+    state = FSMContext(
+        storage=MemoryStorage(),
+        key=StorageKey(bot_id=1, chat_id=ADMIN_CHAT, user_id=ADMIN_CHAT),
+    )
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Wide"), user_id=user_id, state=state)
+    await handlers.ad_text(a_message("Hello"), user_id=user_id, state=state)
+
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    await handlers.ad_actions(a_callback(f"ad:{broadcast.id}:pick"), user_id=user_id, state=state)
+    await handlers.picker_actions(a_callback(f"{views.PICK}A"), user_id=user_id, state=state)
+
+    data = await state.get_data()
+    assert len(data["selected"]) == 20, "every page, not just the visible eight"

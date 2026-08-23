@@ -112,17 +112,27 @@ nothing to offer otherwise, and it says so.
 5. **Groups**, which opens a tick-box list of **groups** this account can post
    in — private chats and channels are never offered, because an ad in someone's
    DM is unsolicited messaging and a channel you own is better posted to
-   directly;
+   directly. **Select all** takes every group at once; **Select page** takes the
+   eight on screen;
 6. **Send now**, which shows a summary and asks once more.
 
 Your message is posted **exactly as you typed it** — bold, italics, links and
 premium emoji all survive. Write it in Telegram the way you want it to appear
 and send it to the bot; nothing is re-typed or re-parsed on the way.
 
-Premium emoji are the one thing with a condition attached: Telegram only lets a
-**Telegram Premium** account send them. If the connected account is not Premium,
-Telegram refuses the message and the panel says so rather than quietly posting
-a fallback.
+Premium emoji are the one thing with a condition attached. A custom emoji is an
+ordinary emoji character in the text plus an instruction to draw the premium one
+instead — and Telegram honours that instruction **only for a Telegram Premium
+account**. Without Premium the ad arrives showing the ordinary characters.
+
+The panel checks the connected account and warns on the compose and confirm
+screens before you send, rather than leaving you to notice it across 157 posted
+ads.
+
+**The preview inside this bot always shows ordinary emoji**, whatever your
+account has. The preview is plain text, and a bot cannot render a custom emoji
+at all — Telegram reserves those for bots with a Fragment username. Judge the
+result from a posted ad, not from the preview.
 
 The summary tells you how many groups, whether an image is attached, and roughly
 how long it will take. Once sending starts you can pause it — but messages

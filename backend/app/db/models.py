@@ -257,6 +257,12 @@ class TelegramConnection(Base, TimestampMixin):
 
     telegram_account_id: Mapped[int | None] = mapped_column(BigInteger)
     telegram_username: Mapped[str | None] = mapped_column(String(64))
+    #: Telegram Premium on this account. Only a premium account may send custom
+    #: emoji, so an ad written with them renders as fallback characters without
+    #: it — which is worth saying before the ad goes out, not after.
+    is_premium: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     #: SHA-256 of the E.164 phone. The raw phone number is never stored.
     phone_hash: Mapped[str | None] = mapped_column(String(64))
 

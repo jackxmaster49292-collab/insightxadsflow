@@ -48,6 +48,7 @@ class MockScript:
     healthy: bool = True
     account_id: int = 777_000_111
     username: str = "mock_account"
+    premium: bool = False
     next_destination_message_id: int = 1000
     connect_error: BaseException | None = None
     #: Errors keyed by method name, raised on the next call to that method.
@@ -93,6 +94,7 @@ class MockAdapter:
             account_id=self.script.account_id,
             username=self.script.username,
             session_string="mock-session-string" if self.kind == "user" else None,
+            premium=self.script.premium,
         )
 
     async def disconnect(self, *, revoke: bool = False) -> None:
@@ -107,6 +109,7 @@ class MockAdapter:
             reason_code="ok" if self.script.healthy else "unauthorized",
             account_id=self.script.account_id,
             username=self.script.username,
+            premium=self.script.premium,
         )
 
     # --- discovery ------------------------------------------------------- #
