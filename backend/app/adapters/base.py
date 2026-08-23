@@ -9,9 +9,9 @@ vocabulary, which is what lets the entire system be tested against
 from __future__ import annotations
 
 import enum
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from app.adapters.errors import ClassifiedError
 
@@ -118,6 +118,48 @@ class HealthReport:
     username: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TextEntity:
+    """One piece of formatting in a message.
+
+    Our own shape, because a Telegram entity type must not cross this boundary.
+    ``offset`` and ``length`` are in **UTF-16 code units**, which is what both
+    the Bot API and MTProto use — passing them through unchanged is therefore
+    correct, and recomputing them in Python's code points would silently
+    corrupt any message containing an emoji.
+
+    ``custom_emoji_id`` carries a premium emoji. Sending one requires Telegram
+    Premium on the account doing the sending; Telegram rejects it otherwise,
+    which is surfaced rather than silently dropped.
+    """
+
+    type: str
+    offset: int
+    length: int
+    url: str | None = None
+    custom_emoji_id: str | None = None
+    language: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"type": self.type, "offset": self.offset, "length": self.length}
+        for name in ("url", "custom_emoji_id", "language"):
+            value = getattr(self, name)
+            if value is not None:
+                data[name] = value
+        return data
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> TextEntity:
+        return cls(
+            type=str(data["type"]),
+            offset=int(data["offset"]),
+            length=int(data["length"]),
+            url=data.get("url"),
+            custom_emoji_id=data.get("custom_emoji_id"),
+            language=data.get("language"),
+        )
+
+
 @dataclass(slots=True)
 class ConnectionState:
     status: str
@@ -187,12 +229,18 @@ class TelegramAdapter(Protocol):
         destination: ChatRef,
         text: str,
         *,
+        entities: Sequence[TextEntity] = (),
         random_id: int | None = None,
     ) -> DeliveryReceipt:
         """Send an original message the customer wrote.
 
         Unlike the forward/copy pair above, nothing here originates from another
         chat, so there is no source peer and no content-protection question.
+
+        ``entities`` reproduces the bold, links and premium emoji exactly as the
+        customer typed them. Passed as data rather than re-parsed from markup:
+        round-tripping through Markdown would mangle any text that happens to
+        contain an asterisk or an underscore.
         """
         ...
 
@@ -202,6 +250,7 @@ class TelegramAdapter(Protocol):
         photo: bytes,
         *,
         caption: str = "",
+        caption_entities: Sequence[TextEntity] = (),
         filename: str = "image.jpg",
         random_id: int | None = None,
     ) -> DeliveryReceipt:

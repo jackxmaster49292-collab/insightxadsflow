@@ -12,7 +12,7 @@ Notable real constraints, handled honestly rather than papered over:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import structlog
@@ -31,6 +31,7 @@ from app.adapters.base import (
     InboundMessage,
     MediaType,
     PeerKind,
+    TextEntity,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import AdapterError, ClassifiedError, ErrorClass, classify_error
@@ -88,6 +89,27 @@ def detect_media_type(message: Any) -> MediaType:
         return MediaType.text
     # Service messages (joins, pins, title changes) carry none of the above.
     return MediaType.service
+
+
+def _to_bot_entities(entities: Sequence[TextEntity]) -> list[Any]:
+    """Our neutral entities as Bot API ones.
+
+    Offsets are passed through untouched: both sides count in UTF-16 code
+    units, so recomputing them would be the bug rather than the fix.
+    """
+    from aiogram.types import MessageEntity
+
+    return [
+        MessageEntity(
+            type=entity.type,
+            offset=entity.offset,
+            length=entity.length,
+            url=entity.url,
+            custom_emoji_id=entity.custom_emoji_id,
+            language=entity.language,
+        )
+        for entity in entities
+    ]
 
 
 class BotAdapter:
@@ -286,12 +308,17 @@ class BotAdapter:
         destination: ChatRef,
         text: str,
         *,
+        entities: Sequence[TextEntity] = (),
         random_id: int | None = None,
     ) -> DeliveryReceipt:
         # random_id is accepted for interface symmetry and ignored: the Bot API
         # has no idempotency token, which is why a timeout fails closed here.
         try:
-            sent = await self._bot.send_message(chat_id=destination.peer_id, text=text)
+            sent = await self._bot.send_message(
+                chat_id=destination.peer_id,
+                text=text,
+                entities=_to_bot_entities(entities) or None,
+            )
             return DeliveryReceipt(destination_message_id=int(sent.message_id))
         except TimeoutError as exc:
             raise AmbiguousDeliveryError(reasons.AMBIGUOUS_TIMEOUT) from exc
@@ -302,6 +329,7 @@ class BotAdapter:
         photo: bytes,
         *,
         caption: str = "",
+        caption_entities: Sequence[TextEntity] = (),
         filename: str = "image.jpg",
         random_id: int | None = None,
     ) -> DeliveryReceipt:
@@ -312,6 +340,7 @@ class BotAdapter:
                 chat_id=destination.peer_id,
                 photo=BufferedInputFile(photo, filename=filename),
                 caption=caption or None,
+                caption_entities=_to_bot_entities(caption_entities) or None,
             )
             return DeliveryReceipt(destination_message_id=int(sent.message_id))
         except TimeoutError as exc:

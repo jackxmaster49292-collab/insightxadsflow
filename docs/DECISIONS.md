@@ -408,6 +408,39 @@ connection every time, and that is now the expected path rather than an edge
 case. Anyone wanting to connect the driving account needs a sign-in surface
 outside Telegram, which this deployment deliberately no longer has (ADR-023).
 
+### ADR-037 — An ad carries Telegram's entities, not Markdown
+**Context.** An ad composed with bold text and premium emoji was posted as plain
+text with fallback emoji. Only ``body_text`` was stored, so everything Telegram
+describes as an *entity* — bold, links, custom emoji — was dropped between
+composing and posting.
+**Decision.** Store the entities as data, in ``broadcasts.body_entities``, and
+pass them to the send call. Not Markdown: markup cannot express a custom emoji
+at all, and round-tripping through it corrupts any message containing a literal
+asterisk or underscore. Offsets pass through untouched because the Bot API and
+MTProto both count UTF-16 code units — recomputing them in Python's code points
+would shift every entity after an emoji. A neutral ``TextEntity`` keeps Telegram
+types out of the engine, and each adapter converts at its own edge.
+**Consequence.** An ad is posted exactly as it was written. Premium emoji need
+Telegram Premium on the sending account; Telegram rejects them otherwise, and
+that rejection now names the cause rather than reading as a generic failure. An
+entity type we do not recognise is dropped rather than guessed at — losing one
+piece of formatting beats the whole message being refused.
+
+### ADR-038 — An ad targets groups; forwarding may still target a channel
+**Context.** Synchronizing an account discovers everything in its dialog list —
+719 chats in the reported case, mostly private conversations and channels. The
+group picker offered every chat the account could post in.
+**Decision.** The ad picker is restricted to ``group`` and ``supergroup``. A
+private chat was already impossible (``sync.NON_DESTINATION_KINDS``), which is
+the part that matters: an ad in someone's DM is unsolicited messaging.
+Excluding channels is a product choice — a channel you own is better posted to
+directly. Forwarding rules keep the wider set, because copying into a channel
+you run is a legitimate thing to want.
+**Consequence.** The Groups screen shows groups and states how many other chats
+exist, so the gap between "719 synced" and "40 listed" reads as a filter rather
+than a bug. Private chats and channels stay synchronized, because forwarding
+uses them as sources.
+
 ---
 
 ## Open tradeoffs

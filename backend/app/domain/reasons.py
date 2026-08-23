@@ -35,6 +35,7 @@ MEDIA_UNAVAILABLE: Final = "media_unavailable"
 CAPTION_TOO_LONG: Final = "caption_too_long"
 MESSAGE_TOO_LONG: Final = "message_too_long"
 ENTITY_TOO_LARGE: Final = "entity_too_large"
+PREMIUM_EMOJI_REQUIRED: Final = "premium_emoji_required"
 
 # --- filtering --------------------------------------------------------------
 FILTERED_MEDIA_TYPE: Final = "filtered_media_type"
@@ -134,6 +135,11 @@ REASON_TEXT: dict[str, str] = {
     CAPTION_TOO_LONG: "The caption exceeds Telegram's length limit.",
     MESSAGE_TOO_LONG: "The message exceeds Telegram's length limit.",
     ENTITY_TOO_LARGE: "The attached file is too large for this connection type.",
+    PREMIUM_EMOJI_REQUIRED: (
+        "This message uses premium emoji, and Telegram only lets a Telegram "
+        "Premium account send those. Either subscribe on the account doing the "
+        "posting, or rewrite the ad with ordinary emoji."
+    ),
     FILTERED_MEDIA_TYPE: "Skipped: this media type is not selected on the rule.",
     FILTERED_KEYWORD_INCLUDE: "Skipped: no required keyword was found.",
     FILTERED_KEYWORD_EXCLUDE: "Skipped: an excluded keyword was found.",

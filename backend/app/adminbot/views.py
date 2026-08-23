@@ -903,7 +903,7 @@ def confirm_delete_rule(*, rule: ForwardingRule) -> Screen:
 # --------------------------------------------------------------------------- #
 # Groups and activity
 # --------------------------------------------------------------------------- #
-def chats_list(*, chats: Sequence, page: int) -> Screen:  # type: ignore[type-arg]
+def chats_list(*, chats: Sequence, page: int, other_count: int = 0) -> Screen:  # type: ignore[type-arg]
     if not chats:
         return Screen(
             "💭 *Groups*\n\nNone yet\\.\n\n"
@@ -913,6 +913,14 @@ def chats_list(*, chats: Sequence, page: int) -> Screen:  # type: ignore[type-ar
 
     window, page, pages = _page_of(chats, page, PAGE_SIZE)
     lines = [f"💭 *Groups* \\({len(chats)}\\)", ""]
+    if other_count:
+        # Private chats and channels are synchronized too — forwarding uses them
+        # as sources — but they are not what this screen is about, and an
+        # unexplained gap between 719 and 40 would look like a bug.
+        lines += [
+            f"_Plus {other_count} private chats and channels, which an ad never posts to\\._",
+            "",
+        ]
     for chat in window:
         access = chat.access
         can_post = access and access.can_post_destination

@@ -7,7 +7,7 @@ Every automated test runs against this — no test ever contacts Telegram.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
 from app.adapters.base import (
@@ -20,6 +20,7 @@ from app.adapters.base import (
     DiscoveredChat,
     HealthReport,
     InboundMessage,
+    TextEntity,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import ClassifiedError, classify_error
@@ -177,9 +178,12 @@ class MockAdapter:
         destination: ChatRef,
         text: str,
         *,
+        entities: Sequence[TextEntity] = (),
         random_id: int | None = None,
     ) -> DeliveryReceipt:
-        self.script.record("send_text", destination, text, random_id=random_id)
+        self.script.record(
+            "send_text", destination, text, entities=list(entities), random_id=random_id
+        )
         self._maybe_raise(destination)
         self.script.next_destination_message_id += 1
         return DeliveryReceipt(destination_message_id=self.script.next_destination_message_id)
@@ -190,6 +194,7 @@ class MockAdapter:
         photo: bytes,
         *,
         caption: str = "",
+        caption_entities: Sequence[TextEntity] = (),
         filename: str = "image.jpg",
         random_id: int | None = None,
     ) -> DeliveryReceipt:
@@ -200,6 +205,7 @@ class MockAdapter:
             destination,
             len(photo),
             caption=caption,
+            caption_entities=list(caption_entities),
             filename=filename,
             random_id=random_id,
         )

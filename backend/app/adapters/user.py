@@ -11,7 +11,7 @@ all after a process restart.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import structlog
@@ -29,6 +29,7 @@ from app.adapters.base import (
     InboundMessage,
     MediaType,
     PeerKind,
+    TextEntity,
 )
 from app.adapters.capabilities import capabilities_for
 from app.adapters.errors import AdapterError, ClassifiedError, ErrorClass, classify_error
@@ -90,6 +91,65 @@ def detect_media_type(message: Any) -> MediaType:
                 return MediaType.animation
         return MediaType.document
     return MediaType.other
+
+
+#: Bot API entity names mapped to the MTProto classes that carry them. The two
+#: APIs describe the same formatting with different vocabularies, and this is
+#: the only place that has to know both.
+_MTPROTO_ENTITIES: dict[str, str] = {
+    "bold": "MessageEntityBold",
+    "italic": "MessageEntityItalic",
+    "underline": "MessageEntityUnderline",
+    "strikethrough": "MessageEntityStrike",
+    "spoiler": "MessageEntitySpoiler",
+    "code": "MessageEntityCode",
+    "blockquote": "MessageEntityBlockquote",
+    "url": "MessageEntityUrl",
+    "email": "MessageEntityEmail",
+    "phone_number": "MessageEntityPhone",
+    "mention": "MessageEntityMention",
+    "hashtag": "MessageEntityHashtag",
+    "cashtag": "MessageEntityCashtag",
+    "bot_command": "MessageEntityBotCommand",
+}
+
+
+def _to_mtproto_entities(entities: Sequence[TextEntity]) -> list[Any]:
+    """Our neutral entities as MTProto ones.
+
+    Offsets pass through untouched — both APIs count UTF-16 code units.
+
+    An entity type we do not recognise is dropped rather than guessed at: losing
+    one piece of formatting is a far better outcome than Telegram rejecting the
+    whole message and the ad not being posted at all.
+    """
+    built: list[Any] = []
+    for entity in entities:
+        if entity.type == "custom_emoji" and entity.custom_emoji_id:
+            built.append(
+                types.MessageEntityCustomEmoji(
+                    offset=entity.offset,
+                    length=entity.length,
+                    document_id=int(entity.custom_emoji_id),
+                )
+            )
+        elif entity.type == "text_link" and entity.url:
+            built.append(
+                types.MessageEntityTextUrl(
+                    offset=entity.offset, length=entity.length, url=entity.url
+                )
+            )
+        elif entity.type == "pre":
+            built.append(
+                types.MessageEntityPre(
+                    offset=entity.offset, length=entity.length, language=entity.language or ""
+                )
+            )
+        elif entity.type in _MTPROTO_ENTITIES:
+            factory = getattr(types, _MTPROTO_ENTITIES[entity.type], None)
+            if factory is not None:
+                built.append(factory(offset=entity.offset, length=entity.length))
+    return built
 
 
 class UserAdapter:
@@ -366,14 +426,16 @@ class UserAdapter:
         destination: ChatRef,
         text: str,
         *,
+        entities: Sequence[TextEntity] = (),
         random_id: int | None = None,
     ) -> DeliveryReceipt:
-        await self._ready()
         """MTProto carries a ``random_id``, so a retry after an ambiguous
         timeout is deduplicated by Telegram rather than by us guessing."""
+        await self._ready()
         sent = await self._client.send_message(
             await self._entity(destination),
             message=text,
+            formatting_entities=_to_mtproto_entities(entities) or None,
         )
         return DeliveryReceipt(destination_message_id=int(sent.id))
 
@@ -383,6 +445,7 @@ class UserAdapter:
         photo: bytes,
         *,
         caption: str = "",
+        caption_entities: Sequence[TextEntity] = (),
         filename: str = "image.jpg",
         random_id: int | None = None,
     ) -> DeliveryReceipt:
@@ -399,6 +462,7 @@ class UserAdapter:
             await self._entity(destination),
             file=buffer,
             caption=caption or None,
+            formatting_entities=_to_mtproto_entities(caption_entities) or None,
         )
         return DeliveryReceipt(destination_message_id=int(sent.id))
 

@@ -624,6 +624,16 @@ class Broadcast(Base, TimestampMixin):
     )
 
     body_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    #: The formatting the customer typed — bold, links, premium emoji — exactly
+    #: as Telegram described it, so each delivery reproduces the original rather
+    #: than a plain-text approximation.
+    #:
+    #: Stored as data rather than as Markdown: round-tripping through markup
+    #: mangles any message containing a literal asterisk or underscore, and
+    #: markup cannot express a custom emoji at all.
+    body_entities: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
     media_kind: Mapped[BroadcastMedia] = mapped_column(
         _enum(BroadcastMedia, "broadcast_media"), default=BroadcastMedia.none, nullable=False
     )

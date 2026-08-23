@@ -117,10 +117,15 @@ job predates the current rule and re-evaluate filters before sending (see [OPERA
 ### `broadcasts`
 An "ad": the customer's own message, to be posted to groups they chose.
 `id` · `user_id` · `connection_id` · `name` · `status`
-ENUM(`draft`,`scheduled`,`sending`,`paused`,`completed`,`cancelled`) · `body_text` TEXT ·
+ENUM(`draft`,`scheduled`,`sending`,`paused`,`completed`,`cancelled`) · `body_text` TEXT · `body_entities` JSONB ·
 `media_kind` ENUM(`none`,`photo`) · `media_bytes` BYTEA NULL · `media_filename` NULL ·
 `delay_ms` INT · `scheduled_for` NULL · `started_at` NULL · `completed_at` NULL ·
 `paused_reason_code` NULL
+`body_entities` holds Telegram's own description of the formatting — bold, links and premium emoji as
+offsets into the text. Stored as data rather than Markdown: markup cannot express a custom emoji, and
+round-tripping through it corrupts any message containing a literal asterisk (ADR-037). Offsets are in
+UTF-16 code units, as both Telegram APIs use.
+
 `media_bytes` holds the image itself rather than a Telegram `file_id`, because a `file_id` is scoped to
 the bot that received it and is meaningless to the connection doing the posting (ADR-027). Capped at
 `MAX_BROADCAST_MEDIA_BYTES`.

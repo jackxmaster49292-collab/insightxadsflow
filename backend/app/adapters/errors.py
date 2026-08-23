@@ -88,6 +88,9 @@ _BY_EXCEPTION_NAME: dict[str, tuple[ErrorClass, str]] = {
     "PhoneNumberUnoccupiedError": (ErrorClass.AUTH, "phone_number_unregistered"),
     "PhoneNumberFloodError": (ErrorClass.RATE_LIMIT, "phone_number_flood"),
     "PasswordHashInvalidError": (ErrorClass.AUTH, "two_factor_password_invalid"),
+    # Custom (premium) emoji need Telegram Premium on the sending account.
+    # Permanent for this message: retrying cannot make the account premium.
+    "PremiumAccountRequiredError": (ErrorClass.PERMANENT_CONTENT, "premium_emoji_required"),
     "SessionPasswordNeededError": (ErrorClass.AUTH, "two_factor_required"),
     "ChatWriteForbiddenError": (ErrorClass.PERMISSION, "write_forbidden"),
     "ChatAdminRequiredError": (ErrorClass.PERMISSION, "admin_required"),

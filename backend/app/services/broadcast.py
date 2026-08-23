@@ -25,7 +25,12 @@ from datetime import UTC, datetime
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.base import AccessReport, AmbiguousDeliveryError, TelegramAdapter
+from app.adapters.base import (
+    AccessReport,
+    AmbiguousDeliveryError,
+    TelegramAdapter,
+    TextEntity,
+)
 from app.adapters.errors import ErrorClass, classify_error
 from app.config import get_settings
 from app.db.models import (
@@ -280,11 +285,13 @@ async def execute_target(
 
     # --- deliver ------------------------------------------------------------
     try:
+        entities = [TextEntity.from_json(e) for e in broadcast.body_entities]
         if has_media:
             receipt = await adapter.send_photo(
                 destination_ref,
                 bytes(broadcast.media_bytes or b""),
                 caption=broadcast.body_text,
+                caption_entities=entities,
                 filename=broadcast.media_filename or "image.jpg",
                 random_id=target.mtproto_random_id,
             )
@@ -292,6 +299,7 @@ async def execute_target(
             receipt = await adapter.send_text(
                 destination_ref,
                 broadcast.body_text,
+                entities=entities,
                 random_id=target.mtproto_random_id,
             )
     except AmbiguousDeliveryError:

@@ -67,6 +67,9 @@ PICK_TARGET = "pick_target"
 
 PICK_HINT = "Tap to select. Only groups this account can post in are listed."
 
+#: Rules can also target a channel, so the hint differs.
+PICK_HINT_RULE = "Tap to select. Only chats this account can post in are listed."
+
 
 # --------------------------------------------------------------------------- #
 # Rendering
@@ -162,6 +165,28 @@ async def _active_connection(session, user_id: uuid.UUID):  # type: ignore[no-un
     connections = await connection_repo.list_for_user(session, user_id=user_id)
     active = [c for c in connections if c.status is ConnectionStatus.active]
     return active[0] if active else (connections[0] if connections else None)
+
+
+def _entities_of(message: Message) -> list[dict[str, Any]]:
+    """The formatting Telegram attached to what the customer typed.
+
+    Taken as data rather than re-parsed from the text. Telegram already knows
+    where the bold starts and which emoji is a premium one; re-deriving that
+    from Markdown would both lose the custom emoji and corrupt any message
+    containing a literal asterisk.
+    """
+    entities = message.entities or message.caption_entities or []
+    return [
+        {
+            "type": entity.type,
+            "offset": entity.offset,
+            "length": entity.length,
+            **({"url": entity.url} if entity.url else {}),
+            **({"custom_emoji_id": entity.custom_emoji_id} if entity.custom_emoji_id else {}),
+            **({"language": entity.language} if entity.language else {}),
+        }
+        for entity in entities
+    ]
 
 
 def _describe(exc: BaseException) -> str:
@@ -313,8 +338,16 @@ async def nav_connections(query: CallbackQuery, user_id: uuid.UUID, **_extra: An
 @router.callback_query(F.data.startswith("nav:chats"))
 async def nav_chats(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
     async with session_scope() as session:
-        chats = await chat_repo.list_filtered(session, user_id=user_id, limit=500)
-    await _render(query, views.chats_list(chats=chats, page=_page_from(query.data or "")))
+        everything = await chat_repo.list_filtered(session, user_id=user_id, limit=1000)
+    groups = [c for c in everything if c.chat_kind.value in AD_CHAT_KINDS]
+    await _render(
+        query,
+        views.chats_list(
+            chats=groups,
+            page=_page_from(query.data or ""),
+            other_count=len(everything) - len(groups),
+        ),
+    )
     await query.answer()
 
 
@@ -855,6 +888,7 @@ async def ad_text(message: Message, user_id: uuid.UUID, state: FSMContext, **_ex
             await _go_home(message, user_id)
             return
         broadcast.body_text = body
+        broadcast.body_entities = _entities_of(message)
 
     await state.set_state(None)
     await _send(message, await _compose_screen(user_id, broadcast_id))
@@ -906,6 +940,7 @@ async def ad_media(message: Message, user_id: uuid.UUID, state: FSMContext, **_e
         broadcast.media_filename = "ad.jpg"
         if caption:
             broadcast.body_text = caption
+            broadcast.body_entities = _entities_of(message)
 
     await state.set_state(None)
     await _send(message, await _compose_screen(user_id, broadcast_id))
@@ -1107,15 +1142,28 @@ async def ad_actions(
 # --------------------------------------------------------------------------- #
 # Group picker — shared by ads and rules
 # --------------------------------------------------------------------------- #
-async def _postable_chats(session, user_id: uuid.UUID):  # type: ignore[no-untyped-def]
-    """Groups the connection can actually post in, in a stable order.
+#: What an ad may be posted to. A private chat is excluded further down the
+#: stack as well — posting an ad into someone's DM is unsolicited messaging, and
+#: `sync.NON_DESTINATION_KINDS` refuses it outright. Channels are excluded here
+#: as a product choice: an ad is for groups, and a channel you own is better
+#: posted to directly.
+AD_CHAT_KINDS = {"group", "supergroup"}
 
-    Only postable ones are offered: listing a group the account cannot write to
+
+async def _postable_chats(session, user_id: uuid.UUID, *, groups_only: bool = False):  # type: ignore[no-untyped-def]
+    """Chats the connection can actually post in, in a stable order.
+
+    Only postable ones are offered: listing one the account cannot write to
     invites selecting it and discovering the problem 300 deliveries later. The
-    sort is fixed because picker buttons address a group by its index.
+    sort is fixed because picker buttons address a chat by its index.
+
+    ``groups_only`` is what an ad uses. A forwarding rule keeps the wider set,
+    because copying into a channel you run is a legitimate thing to want.
     """
     chats = await chat_repo.list_filtered(session, user_id=user_id, limit=1000)
     postable = [c for c in chats if c.access and c.access.can_post_destination]
+    if groups_only:
+        postable = [c for c in postable if c.chat_kind.value in AD_CHAT_KINDS]
     postable.sort(key=lambda c: (c.title.lower(), str(c.id)))
     return postable
 
@@ -1147,7 +1195,7 @@ async def _open_picker(
     list a callback resolves against.
     """
     async with session_scope() as session:
-        chats = await _postable_chats(session, user_id)
+        chats = await _postable_chats(session, user_id, groups_only=broadcast_id is not None)
 
         if broadcast_id is not None:
             selected = set(await broadcast_repo.target_chat_ids(session, broadcast_id=broadcast_id))
