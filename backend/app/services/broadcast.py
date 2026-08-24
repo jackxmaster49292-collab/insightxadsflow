@@ -159,8 +159,24 @@ async def pause(session: AsyncSession, *, broadcast: Broadcast, reason_code: str
     broadcast.paused_reason_code = reason_code
 
 
-async def cancel(session: AsyncSession, *, broadcast: Broadcast) -> int:
-    """Cancelling stops what has not been sent. It cannot unsend anything."""
+async def cancel(
+    session: AsyncSession,
+    *,
+    broadcast: Broadcast,
+    adapter: TelegramAdapter | None = None,
+) -> int:
+    """Cancelling stops what has not been sent. It cannot unsend anything.
+
+    What it *has* sent is archived first. Stopping an ad half way is exactly
+    when a record of what went out matters most, and ``settle`` cannot supply
+    one: it returns early for anything that is not still sending, so a stopped
+    ad used to leave no trace of the groups it had already reached.
+    """
+    try:
+        await archive.store_round(session, broadcast=broadcast, adapter=adapter)
+    except Exception as exc:
+        log.warning("archive_on_cancel_failed", broadcast_id=str(broadcast.id), error=str(exc))
+
     broadcast.status = BroadcastStatus.cancelled
     broadcast.completed_at = datetime.now(UTC)
     return await broadcast_repo.cancel_pending(session, broadcast_id=broadcast.id)

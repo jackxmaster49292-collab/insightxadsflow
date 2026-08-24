@@ -13,7 +13,14 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from app.db.models import AppSetting, Broadcast, ChatKind, TelegramChat
+from app.db.models import (
+    AppSetting,
+    Broadcast,
+    BroadcastTarget,
+    ChatKind,
+    TelegramChat,
+    TelegramConnection,
+)
 from app.domain.message_links import LinkKind, link_for
 from app.services import archive as archive_service
 from app.services import broadcast as broadcast_service
@@ -901,3 +908,99 @@ def test_the_archive_button_is_operator_only():
 
     assert "nav:arch:0" in buttons(True)
     assert "nav:arch:0" not in buttons(False)
+
+
+# --------------------------------------------------------------------------- #
+# Stopping an ad still leaves a record
+# --------------------------------------------------------------------------- #
+async def test_stopping_an_ad_archives_what_it_already_delivered(client, actor, session):
+    """Stopping half way is exactly when the record matters most. settle()
+    returns early for anything not still sending, so a stopped ad used to leave
+    no trace of the groups it had already reached."""
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    # One group receives it, then the customer stops the ad.
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    connection = await session.get(TelegramConnection, broadcast.connection_id)
+    from app.services import connections as connection_service
+
+    adapter = await connection_service.adapter_for(session, connection)
+    await broadcast_service.execute_target(
+        session, target=targets[0], adapter=adapter, connection=connection
+    )
+    await session.commit()
+
+    _bot_script().calls.clear()
+    await broadcast_service.cancel(session, broadcast=broadcast)
+    await session.commit()
+
+    archived = _bot_script().calls_to("send_text")
+    assert archived, "the one delivered group is still recorded"
+    index = archived[-1].args[1]
+    assert "1 groups" in index
+    assert "Group 01" in index
+    assert "Group 02" not in index, "and groups it never reached are not claimed"
+
+
+async def test_stopping_an_ad_that_delivered_nothing_archives_nothing(client, actor, session):
+    """An empty index would be noise in the one place kept as evidence."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await broadcast_service.cancel(session, broadcast=broadcast)
+    await session.commit()
+
+    assert _bot_script().calls_to("send_text") == []
+
+
+async def test_the_bot_route_archives_without_an_account_adapter(client, actor, session):
+    """Stopping should not have to build an MTProto client when the bot is the
+    one that carries the archive."""
+    from app.services import archive as archive_service
+
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    _bot_script().calls.clear()
+    sent = await archive_service.store_round(session, broadcast=broadcast, adapter=None)
+
+    assert sent > 0
+    assert _bot_script().calls_to("send_text")
+
+
+async def test_the_account_route_says_so_when_it_has_no_courier(client, actor, session):
+    """Silence here would look identical to "no archive configured"."""
+    from app.services import archive as archive_service
+
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _with_archive(session, actor, ctx)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    sent = await archive_service.store_round(session, broadcast=broadcast, adapter=None)
+    assert sent == 0, "refused, and logged — not silently treated as unconfigured"

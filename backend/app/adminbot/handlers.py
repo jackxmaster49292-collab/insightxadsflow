@@ -16,6 +16,7 @@ blocks on Telegram I/O.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import re
 import uuid
@@ -1656,7 +1657,15 @@ async def ad_actions(
             notice = "Resumed."
 
         elif action == "cancel":
-            stopped = await broadcast_service.cancel(session, broadcast=broadcast)
+            # Only the account route needs the account's adapter, and building
+            # an MTProto client costs a connection — so it is built when it is
+            # the courier and not otherwise.
+            courier = None
+            where = await archive_service.destination_for(session, user_id=user_id)
+            if where is not None and not where.via_bot and owner_connection is not None:
+                with contextlib.suppress(Exception):
+                    courier = await connection_service.adapter_for(session, owner_connection)
+            stopped = await broadcast_service.cancel(session, broadcast=broadcast, adapter=courier)
             await event_repo.audit(
                 session,
                 user_id=user_id,

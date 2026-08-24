@@ -928,6 +928,24 @@ nothing: pausing a rule already pushes an alert, which arrives whether or not
 anyone opens this screen. Home now reads the same on the first visit and the
 thousandth, which is what an introduction should do.
 
+### ADR-066 — Stopping an ad archives what it already delivered
+**Context.** An ad stopped after 12 of 156 groups left no archive at all.
+``settle()`` returns early for anything that is not still ``sending``, and
+``cancel()`` set the status without archiving — so the record vanished at
+exactly the moment it was most wanted, since the 12 deliveries are real and
+cannot be unsent.
+**Decision.** ``cancel()`` archives first, then cancels. Its ``adapter`` is
+optional, because the bot route needs no account client and building an MTProto
+connection on a Stop tap would be waste; the panel builds one only when the
+destination is a synced group. Without an adapter, bios are not learned that
+time — cached ones still appear — and the account route refuses **loudly**,
+because silence there is indistinguishable from "no archive configured".
+**Consequence.** Only groups that actually received the ad appear, so a stopped
+ad's index never claims a group it never reached. An ad that delivered nothing
+archives nothing, since an empty index is noise in the one place kept as
+evidence. Verified by removing the call: the stopped-ad test fails on an empty
+archive.
+
 ---
 
 ## Open tradeoffs

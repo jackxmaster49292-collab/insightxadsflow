@@ -287,9 +287,15 @@ async def store_round(
     session: AsyncSession,
     *,
     broadcast: Broadcast,
-    adapter: TelegramAdapter,
+    adapter: TelegramAdapter | None = None,
 ) -> int:
     """Post the round's copy and index. Returns how many messages were sent.
+
+    ``adapter`` is the *account's*, and is optional: stopping an ad archives
+    what it already delivered, and building an MTProto client for that when the
+    bot is the courier would be waste. Without one, group bios are not learned
+    this time — cached ones still appear — and the account route cannot
+    deliver, which is said out loud rather than passed over.
 
     Best-effort by contract: an archive that fails must never fail the round it
     is describing. The ads are already delivered by the time this runs, and a
@@ -306,16 +312,24 @@ async def store_round(
 
     # Details are always learned through the *account*: only it is a member of
     # the groups being described, and the bot is not.
-    await _fill_details(session, rows, adapter)
+    if adapter is not None:
+        await _fill_details(session, rows, adapter)
     lines = _index_lines(rows)
 
-    courier = adapter
     if destination.via_bot:
-        from_bot = bot_adapter()
-        if from_bot is None:
+        courier = bot_adapter()
+        if courier is None:
             log.warning("archive_no_bot_token", broadcast_id=str(broadcast.id))
             return 0
-        courier = from_bot
+    elif adapter is None:
+        log.warning(
+            "archive_needs_the_account",
+            broadcast_id=str(broadcast.id),
+            detail="destination is a synced group, which only the account can post to",
+        )
+        return 0
+    else:
+        courier = adapter
 
     ref = destination.ref
     round_label = f" — round {broadcast.repeat_count}" if broadcast.repeat_every_s else ""
