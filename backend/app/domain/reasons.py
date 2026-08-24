@@ -89,6 +89,7 @@ BROADCAST_EMPTY: Final = "broadcast_empty"
 AUTO_REPLY_SENT: Final = "auto_reply_sent"
 AUTO_REPLY_COOLDOWN: Final = "auto_reply_cooldown"
 AUTO_REPLY_DISABLED: Final = "auto_reply_disabled"
+AUTO_REPLY_NOT_ADVERTISING: Final = "auto_reply_not_advertising"
 AUTO_REPLY_NOT_PRIVATE: Final = "auto_reply_not_private"
 
 # --- signing in an account --------------------------------------------------

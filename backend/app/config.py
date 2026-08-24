@@ -178,6 +178,14 @@ class Settings(BaseSettings):
             if url
         ]
 
+    #: How long after an ad finishes auto-reply keeps answering.
+    #:
+    #: Auto-reply exists to answer people who saw an ad, and they do not all
+    #: write within the minute the round takes. Tying it strictly to "an ad is
+    #: sending right now" would leave most of them unanswered; this is the
+    #: window in which a reply is still obviously a reply to that ad.
+    auto_reply_after_ad_hours: int = 24
+
     # --- Auto-reply ---------------------------------------------------------
     #: How long before the same person may receive another automatic reply.
     #: Not a throttle for our benefit — it is what keeps a reply from becoming

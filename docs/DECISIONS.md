@@ -1071,6 +1071,45 @@ button at a time, and they mean different things. Deleting removes the ad and
 its per-group record; it cannot unsend a single message, which the confirmation
 says.
 
+### ADR-075 — Auto-reply answers only while the account is advertising
+**Context.** Auto-reply answered anyone who wrote in, at any hour, for as long
+as it was switched on. The operator asked for it to work the way a competing
+bot describes: replies tied to the broadcast.
+**Decision.** A reply goes out only when that account has an ad ``sending`` —
+which a repeating ad remains between rounds — or one that finished within
+``auto_reply_after_ad_hours`` (24). The window matters more than the round: a
+one-shot ad is over in a minute and the people who saw it are not.
+**Consequence.** This is narrower than what it replaces, and narrower is
+better here. An account answering strangers around the clock is behaving like
+a bot; one answering while it advertises is answering the people who saw the
+ad. It also bounds the damage of a wrong reply text — it can only reach people
+who wrote during a campaign window. The scope is per account: someone else
+advertising says nothing about whether people are writing to *you*.
+
+### ADR-076 — Forwarding leaves the panel
+**Context.** The operator said the forwarding button was no use to them.
+**Decision.** The whole panel surface goes — the button, the ``/rules``
+command, the rule screens, the compose flow and its states. The group picker
+becomes ads-only, which is what it now serves. The models, the HTTP API and the
+worker's delivery path stay: they are a separate surface with their own tests,
+and removing them was neither asked for nor free.
+**Consequence.** Forwarding is no longer reachable from Telegram. Anything
+already created keeps running through the worker, and the API can still drive
+it. If the panel surface is wanted back it is a re-add, not a rebuild.
+
+### ADR-077 — Auto-join is refused, again
+**Context.** The operator asked whether the bot could join groups
+automatically.
+**Decision.** No, and it is not a judgement call: the founding brief lists
+auto-join among the capabilities this product does not implement, and
+``test_nothing_in_the_codebase_joins_chats_or_collects_members`` fails the
+build if ``join_chat``, ``joinchannel`` or ``importchatinvite`` appears
+anywhere in ``app/``.
+**Consequence.** Groups are joined by the person, and ``Sync groups`` picks
+them up. The practical argument matches the principled one: entering groups
+uninvited is the behaviour Telegram restricts accounts for, and the account at
+risk is the customer's own.
+
 ---
 
 ## Open tradeoffs

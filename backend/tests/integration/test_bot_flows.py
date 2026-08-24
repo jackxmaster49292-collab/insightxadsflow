@@ -33,7 +33,6 @@ from app.db.models import (
     ControlTask,
     ControlTaskKind,
     JobStatus,
-    RuleStatus,
     TelegramConnection,
 )
 from app.domain import reasons
@@ -247,7 +246,6 @@ async def test_every_navigation_screen_renders(client, actor, state):
         "nav:home",
         "nav:ads:0",
         "nav:autoreply",
-        "nav:rules:0",
         "nav:conns",
         "nav:chats:0",
         "nav:activity",
@@ -257,7 +255,6 @@ async def test_every_navigation_screen_renders(client, actor, state):
             "nav:home": handlers.nav_home,
             "nav:ads:0": handlers.nav_ads,
             "nav:autoreply": handlers.nav_autoreply,
-            "nav:rules:0": handlers.nav_rules,
             "nav:conns": handlers.nav_connections,
             "nav:chats:0": handlers.nav_chats,
             "nav:activity": handlers.nav_activity,
@@ -858,13 +855,11 @@ async def test_a_button_for_something_that_was_deleted_says_so(client, actor, st
 
 
 async def test_a_malformed_callback_does_not_crash(client, actor, state):
-    for data in ("ad:not-a-uuid", "rule:", "conn:zzz"):
+    for data in ("ad:not-a-uuid", "conn:zzz"):
         Sent.reset()
         query = a_callback(data)
         if data.startswith("ad"):
             await handlers.ad_actions(query, user_id=uuid.UUID(actor.id), state=state)
-        elif data.startswith("rule"):
-            await handlers.rule_actions(query, user_id=uuid.UUID(actor.id), state=state)
         else:
             await handlers.connection_actions(query, user_id=uuid.UUID(actor.id))
         assert Sent.alerts, f"{data} produced no response at all"
@@ -926,12 +921,6 @@ def a_broadcast(status, **overrides):
     return fake_broadcast(status=status, **overrides)
 
 
-def a_rule(status):
-    return SimpleNamespace(
-        id=uuid.uuid4(), name="Rule", status=status, delay_ms=0, paused_reason_code=None
-    )
-
-
 @pytest.mark.parametrize("status", [s.value for s in ConnectionStatus])
 def test_every_connection_status_renders(status):
     """`awaiting_code`, `awaiting_2fa` and `paused_safety` all contain an
@@ -959,13 +948,6 @@ def test_every_delivery_status_renders(status):
         views.ad_detail(
             broadcast=a_broadcast(BroadcastStatus.sending), counts=counts, target_count=3
         ),
-        views.rule_detail(
-            rule=a_rule(RuleStatus.active),
-            source_titles=["Source"],
-            destination_count=3,
-            job_counts=counts,
-            preview="A preview sentence.",
-        ),
     ):
         assert_valid_markdown_v2(screen.text)
         assert_keyboard_is_sendable(screen.keyboard)
@@ -976,22 +958,6 @@ def test_every_broadcast_status_renders(status):
     for screen in (
         views.ad_detail(broadcast=a_broadcast(status), counts={}, target_count=1),
         views.ads_list(broadcasts=[a_broadcast(status)], page=0, can_create=True),
-    ):
-        assert_valid_markdown_v2(screen.text)
-        assert_keyboard_is_sendable(screen.keyboard)
-
-
-@pytest.mark.parametrize("status", list(RuleStatus))
-def test_every_rule_status_renders(status):
-    for screen in (
-        views.rules_list(rules=[a_rule(status)], page=0, can_create=True),
-        views.rule_detail(
-            rule=a_rule(status),
-            source_titles=["Source"],
-            destination_count=1,
-            job_counts={},
-            preview="A preview sentence.",
-        ),
     ):
         assert_valid_markdown_v2(screen.text)
         assert_keyboard_is_sendable(screen.keyboard)
@@ -1040,15 +1006,14 @@ def _every_callback() -> set[str]:
     )
     target = SimpleNamespace(status=JobStatus.succeeded, position=0, last_error_code=None)
     broadcast = a_broadcast(BroadcastStatus.sending)
-    rule = a_rule(RuleStatus.active)
     connection = a_connection("active")
 
     screens = [
         views.about(),
-        views.home(connections=[connection], rules=[rule], broadcasts=[broadcast], counts={}),
+        views.home(connections=[connection], rules=[], broadcasts=[broadcast], counts={}),
         views.home(
             connections=[connection],
-            rules=[rule],
+            rules=[],
             broadcasts=[broadcast],
             counts={},
             is_operator=True,
@@ -1068,14 +1033,6 @@ def _every_callback() -> set[str]:
         views.connections_list(connections=[connection]),
         views.connection_detail(connection=connection, chat_count=1),
         views.confirm_disconnect(connection=connection),
-        views.rules_list(rules=[rule], page=0, can_create=True),
-        views.rule_detail(
-            rule=rule,
-            source_titles=["Source"],
-            destination_count=1,
-            job_counts={},
-            preview="x",
-        ),
         views.activity(events=[]),
     ]
 

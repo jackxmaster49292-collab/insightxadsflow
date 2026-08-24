@@ -19,7 +19,10 @@ no "reply to everyone who ever wrote" action.
 
 from __future__ import annotations
 
+import uuid
+
 import structlog
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import ChatRef, PeerKind, TelegramAdapter
@@ -43,6 +46,31 @@ class ReplyDecision:
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"ReplyDecision(sent={self.sent}, reason_code={self.reason_code!r})"
+
+
+async def _is_advertising(session: AsyncSession, *, user_id: uuid.UUID) -> bool:
+    """Is this account advertising — now, or recently enough to be answering?
+
+    A repeating ad stays ``sending`` between rounds, so it counts throughout.
+    A one-shot ad is over in a minute, which is why the window after it matters
+    more than the round itself.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.config import get_settings
+    from app.db.models import Broadcast, BroadcastStatus
+
+    since = datetime.now(UTC) - timedelta(hours=get_settings().auto_reply_after_ad_hours)
+    result = await session.execute(
+        select(func.count())
+        .select_from(Broadcast)
+        .where(
+            Broadcast.user_id == user_id,
+            (Broadcast.status == BroadcastStatus.sending)
+            | (Broadcast.completed_at.isnot(None) & (Broadcast.completed_at >= since)),
+        )
+    )
+    return bool(result.scalar_one())
 
 
 async def handle_incoming(
@@ -76,6 +104,14 @@ async def handle_incoming(
     body = reply.body_text.strip()
     if not body:
         return ReplyDecision(False, reasons.AUTO_REPLY_DISABLED)
+
+    # Tied to advertising, deliberately. An account that answers strangers
+    # every hour of every day is behaving like a bot; one that answers while it
+    # is advertising is answering the people who saw the ad. It also narrows
+    # the blast radius of a mistake — a wrong reply text can only reach people
+    # who wrote while an ad was running.
+    if not await _is_advertising(session, user_id=connection.user_id):
+        return ReplyDecision(False, reasons.AUTO_REPLY_NOT_ADVERTISING)
 
     cooldown = settings_cooldown_s if settings_cooldown_s is not None else reply.cooldown_s
 

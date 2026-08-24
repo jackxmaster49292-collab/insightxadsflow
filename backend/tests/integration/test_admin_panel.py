@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.adminbot import views
 from app.adminbot.auth import AccessMiddleware
 from app.config import get_settings
-from app.db.models import AdminNotification, RuleStatus, User
+from app.db.models import AdminNotification, User
 from app.repositories import admins as admin_repo
 from tests.conftest import fake_broadcast
 
@@ -255,8 +255,9 @@ def test_home_screen_introduces_the_features():
     )
     screen = views.home(connections=[connection], rules=[], broadcasts=[], counts={})
 
-    for feature in ("*Ads*", "Auto\\-reply", "*Forwarding*"):
+    for feature in ("*Ads*", "Auto\\-reply"):
         assert feature in screen.text
+    assert "Forwarding" not in screen.text, "removed from the panel"
     # The counts and connection health belong to the screens that own them.
     assert "Jack" not in screen.text
     assert "Last 24h" not in screen.text
@@ -385,18 +386,16 @@ def test_callback_parsing_round_trips():
     assert views.as_uuid(rule_id) == uuid.UUID(rule_id)
 
 
-def test_rules_list_paginates():
-    class FakeRule:
-        def __init__(self, index: int) -> None:
-            self.id = uuid.uuid4()
-            self.name = f"Rule {index}"
-            self.status = RuleStatus.active
+def test_ads_list_paginates():
+    """Out-of-range pages clamp rather than crash — the pager is the one place
+    an index arrives from a button someone pressed twice."""
+    from tests.conftest import fake_broadcast
 
-    rules = [FakeRule(i) for i in range(15)]
-    first = views.rules_list(rules=rules, page=0, can_create=True)
+    ads = [fake_broadcast(name=f"Ad {i}") for i in range(15)]
+    first = views.ads_list(broadcasts=ads, page=0, can_create=True)
     assert "1/3" in " ".join(b.text for row in first.keyboard.inline_keyboard for b in row)
 
-    last = views.rules_list(rules=rules, page=99, can_create=True)
+    last = views.ads_list(broadcasts=ads, page=99, can_create=True)
     assert "3/3" in " ".join(b.text for row in last.keyboard.inline_keyboard for b in row), (
         "out-of-range pages must clamp, not crash"
     )

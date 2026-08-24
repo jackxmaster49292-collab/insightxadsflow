@@ -1,7 +1,7 @@
 """Telegram control-panel handlers.
 
 The bot *is* the admin surface: connecting an account, composing an ad, writing
-an auto-reply and managing forwarding rules all happen here. There is no web
+and an auto-reply all happen here. There is no web
 panel to fall back to.
 
 Every handler runs behind :class:`~app.adminbot.auth.AdminOnlyMiddleware` and
@@ -32,7 +32,6 @@ from aiogram.types import CallbackQuery, Message
 from app.adminbot import icon_setup, premium_icons, secrets, views
 from app.adminbot.states import (
     ComposeAd,
-    ComposeRule,
     ConnectAccount,
     ConnectBot,
     EditAutoReply,
@@ -47,7 +46,6 @@ from app.db.models import (
     ConnectionKind,
     ConnectionStatus,
     ControlTaskKind,
-    JobStatus,
 )
 from app.db.session import session_scope
 from app.repositories import autoreply as autoreply_repo
@@ -63,7 +61,6 @@ from app.repositories import users as user_repo
 from app.services import archive as archive_service
 from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
-from app.services import rules as rule_service
 from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
@@ -501,18 +498,12 @@ async def ads_command(message: Message, user_id: uuid.UUID, **_extra: Any) -> No
     await _send(message, await _ads_screen(user_id, page=0))
 
 
-@router.message(Command("rules"))
-async def rules_command(message: Message, user_id: uuid.UUID, **_extra: Any) -> None:
-    await _send(message, await _rules_screen(user_id, page=0))
-
-
 @router.message(Command("help"))
 async def help_command(message: Message, **_extra: Any) -> None:
     await message.answer(
         "*InsightAdFlow*\n\n"
         "/start — open the panel\n"
         "/ads — your ads\n"
-        "/rules — forwarding rules\n"
         "/cancel — abandon whatever you are in the middle of\n"
         "/help — this message\n\n"
         "*What it does*\n"
@@ -551,12 +542,6 @@ async def nav_home(
 def _page_from(data: str, index: int = 2) -> int:
     parts = data.split(":")
     return int(parts[index]) if len(parts) > index and parts[index].isdigit() else 0
-
-
-@router.callback_query(F.data.startswith("nav:rules"))
-async def nav_rules(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
-    await _render(query, await _rules_screen(user_id, page=_page_from(query.data or "")))
-    await query.answer()
 
 
 @router.callback_query(F.data.startswith("nav:ads"))
@@ -608,13 +593,6 @@ async def _ads_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
         can_create=connection is not None,
         counts_by_id=counts,
     )
-
-
-async def _rules_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
-    async with session_scope() as session:
-        rules = await rule_repo.list_for_user(session, user_id=user_id)
-        connection = await _active_connection(session, user_id)
-    return views.rules_list(rules=rules, page=page, can_create=connection is not None)
 
 
 # --------------------------------------------------------------------------- #
@@ -1663,8 +1641,8 @@ async def _postable_chats(session, user_id: uuid.UUID, *, groups_only: bool = Fa
     invites selecting it and discovering the problem 300 deliveries later. The
     sort is fixed because picker buttons address a chat by its index.
 
-    ``groups_only`` is what an ad uses. A forwarding rule keeps the wider set,
-    because copying into a channel you run is a legitimate thing to want.
+    ``groups_only`` is what an ad uses — a private chat or a channel is never
+    an ad destination.
     """
     chats = await chat_repo.list_filtered(session, user_id=user_id, limit=1000)
     postable = [c for c in chats if c.access and c.access.can_post_destination]
@@ -1691,7 +1669,6 @@ async def _open_picker(
     state: FSMContext,
     *,
     broadcast_id: uuid.UUID | None = None,
-    rule_id: uuid.UUID | None = None,
 ) -> None:
     """Load the selectable groups and remember their order.
 
@@ -1701,22 +1678,18 @@ async def _open_picker(
     list a callback resolves against.
     """
     async with session_scope() as session:
-        chats = await _postable_chats(session, user_id, groups_only=broadcast_id is not None)
+        chats = await _postable_chats(session, user_id, groups_only=True)
 
-        if broadcast_id is not None:
-            selected = set(await broadcast_repo.target_chat_ids(session, broadcast_id=broadcast_id))
-            done = f"ad:{broadcast_id}"
-        else:
-            rule = await rule_repo.get(session, user_id=user_id, rule_id=rule_id or uuid.uuid4())
-            selected = {d.chat_id for d in rule.destinations} if rule else set()
-            done = f"rule:{rule_id}:save"
+        if broadcast_id is None:
+            await query.answer("That ad no longer exists.", show_alert=True)
+            return
+        selected = set(await broadcast_repo.target_chat_ids(session, broadcast_id=broadcast_id))
+        done = f"ad:{broadcast_id}"
 
-    await state.set_state(ComposeAd.picking if broadcast_id else ComposeRule.picking)
+    await state.set_state(ComposeAd.picking)
     await state.set_data(
         {
-            PICK_TARGET: "ad" if broadcast_id is not None else "rule",
             "broadcast_id": str(broadcast_id) if broadcast_id else None,
-            "rule_id": str(rule_id) if rule_id else None,
             "chat_ids": [str(c.id) for c in chats],
             "selected": sorted(str(c) for c in selected),
             "page": 0,
@@ -1768,11 +1741,7 @@ async def picker_actions(
     position = {chat_id: index for index, chat_id in enumerate(chat_ids)}
     chats = sorted(chats, key=lambda c: position.get(str(c.id), len(chat_ids)))
 
-    done = (
-        f"ad:{data.get('broadcast_id')}:save"
-        if data.get(PICK_TARGET) == "ad"
-        else f"rule:{data.get('rule_id')}:save"
-    )
+    done = f"ad:{data.get('broadcast_id')}:save"
     await _render(query, _picker_screen(chats, {uuid.UUID(c) for c in selected}, page, done))
     await query.answer()
 
@@ -1929,236 +1898,7 @@ async def autoreply_cooldown(
 # --------------------------------------------------------------------------- #
 # Forwarding rules
 # --------------------------------------------------------------------------- #
-@router.callback_query(F.data == "rule:new")
-async def rule_new(query: CallbackQuery, state: FSMContext, **_extra: Any) -> None:
-    await state.clear()
-    await state.set_state(ComposeRule.name)
-    if isinstance(query.message, Message):
-        await _ask(
-            query.message,
-            "📋 *New forwarding rule*\n\nGive it a name, like `Deals to partners`\\."
-            "\n\n/cancel to stop\\.",
-        )
-    await query.answer()
-
-
-@router.message(ComposeRule.name)
-async def rule_name(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
-    name = (message.text or "").strip()
-    if not name:
-        await _ask(message, "Send a name, or /cancel\\.")
-        return
-
-    async with session_scope() as session:
-        connection = await _active_connection(session, user_id)
-        if connection is None:
-            await state.clear()
-            await _ask(message, "Connect an account first\\.")
-            await _go_home(message, user_id)
-            return
-        chats = await chat_repo.list_filtered(session, user_id=user_id, limit=1000)
-        readable = [c for c in chats if c.access and c.access.can_read_source]
-        connection_id = connection.id
-
-    if not readable:
-        await state.clear()
-        await _ask(
-            message,
-            "No chat is readable by this connection yet\\. Open *Accounts*, pick "
-            "it, and tap *Sync groups* first\\.",
-        )
-        await _go_home(message, user_id)
-        return
-
-    readable.sort(key=lambda c: (c.title.lower(), str(c.id)))
-    shown = readable[:30]
-    await state.update_data(
-        name=name[:120],
-        connection_id=str(connection_id),
-        source_ids=[str(c.id) for c in shown],
-    )
-    await state.set_state(ComposeRule.source)
-
-    listing = "\n".join(
-        f"`{index + 1}` — {views.escape(chat.title[:40])}" for index, chat in enumerate(shown)
-    )
-    await _ask(
-        message, f"Which chat should messages be *copied from*?\n\n{listing}\n\nSend the number\\."
-    )
-
-
-@router.message(ComposeRule.source)
-async def rule_source(
-    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
-) -> None:
-    raw = (message.text or "").strip()
-    data = await state.get_data()
-    source_ids: list[str] = data.get("source_ids") or []
-    if not raw.isdigit() or not 1 <= int(raw) <= len(source_ids):
-        await _ask(message, "Send one of the numbers listed above, or /cancel\\.")
-        return
-
-    source_id = uuid.UUID(source_ids[int(raw) - 1])
-    connection_id = views.as_uuid(data.get("connection_id"))
-    if connection_id is None:
-        await state.clear()
-        await _go_home(message, user_id)
-        return
-
-    async with session_scope() as session:
-        connection = await connection_repo.get(
-            session, user_id=user_id, connection_id=connection_id
-        )
-        if connection is None:
-            await state.clear()
-            await _go_home(message, user_id)
-            return
-        try:
-            rule = await rule_service.create(
-                session,
-                user_id=user_id,
-                connection=connection,
-                payload=rule_service.RuleInput(
-                    name=data.get("name", "Rule"),
-                    connection_id=connection_id,
-                    source_chat_ids=[source_id],
-                    destination_chat_ids=[],
-                ),
-            )
-        except rule_service.RuleValidationError as exc:
-            await state.clear()
-            await _ask(message, f"Cannot create that rule\\.\n\n_{views.escape(exc.message)}_")
-            await _go_home(message, user_id)
-            return
-        rule_id = rule.id
-
-    await state.clear()
-    await _ask(
-        message,
-        "✅ Rule created as a draft\\.\n\nOpen it to choose the groups to copy "
-        "into, then resume it\\.",
-    )
-    await _send(message, await _rules_screen(user_id, page=0))
-    log.info("rule_created_via_bot", rule_id=str(rule_id))
-
-
 # Excludes ``rule:new``, for the same reason as ``ad:new`` above.
-@router.callback_query(F.data.startswith("rule:") & (F.data != "rule:new"))
-async def rule_actions(
-    query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
-) -> None:
-    _kind, ident, action = views.parse_callback(query.data or "")
-    rule_id = views.as_uuid(ident)
-    if rule_id is None:
-        await query.answer("Unknown rule.", show_alert=True)
-        return
-
-    if action == "pick":
-        await _open_picker(query, user_id, state, rule_id=rule_id)
-        return
-
-    notice: str | None = None
-    if action == "save":
-        kept = await _save_selection(user_id, state)
-        await state.clear()
-        notice = f"{kept} group(s) saved."
-
-    async with session_scope() as session:
-        # user_id-scoped: another admin's rule simply does not resolve.
-        rule = await rule_repo.get(session, user_id=user_id, rule_id=rule_id)
-        if rule is None:
-            await query.answer("That rule no longer exists.", show_alert=True)
-            return
-
-        if action == "pause":
-            await rule_service.pause(session, rule=rule, reason_code="paused_by_customer")
-            await event_repo.audit(
-                session,
-                user_id=user_id,
-                action="rule.pause",
-                object_type="rule",
-                object_id=str(rule.id),
-                payload={"via": "telegram"},
-            )
-            notice = "Rule paused."
-        elif action == "resume":
-            try:
-                await rule_service.resume(session, user_id=user_id, rule=rule)
-                notice = "Rule resumed."
-            except rule_service.RuleValidationError as exc:
-                notice = exc.message
-            else:
-                await event_repo.audit(
-                    session,
-                    user_id=user_id,
-                    action="rule.resume",
-                    object_type="rule",
-                    object_id=str(rule.id),
-                    payload={"via": "telegram"},
-                )
-        elif action == "retry":
-            requeued = await job_repo.requeue_failed(session, rule_id=rule.id)
-            await event_repo.audit(
-                session,
-                user_id=user_id,
-                action="rule.retry_failed",
-                object_type="rule",
-                object_id=str(rule.id),
-                payload={"via": "telegram", "requeued": requeued},
-            )
-            notice = f"{requeued} failed destination(s) queued for retry."
-        elif action == "events":
-            events = await event_repo.list_for_rule(
-                session, user_id=user_id, rule_id=rule.id, limit=12
-            )
-            await _render(query, views.activity(events=events, back=f"rule:{rule.id}"))
-            await query.answer()
-            return
-        elif action == "askdel":
-            await _render(query, views.confirm_delete_rule(rule=rule))
-            await query.answer()
-            return
-        elif action == "delete":
-            await event_repo.audit(
-                session,
-                user_id=user_id,
-                action="rule.delete",
-                object_type="rule",
-                object_id=str(rule.id),
-                payload={"via": "telegram"},
-            )
-            await session.delete(rule)
-            await _render(query, await _rules_screen(user_id, page=0))
-            await query.answer("Deleted.")
-            return
-
-        sources = await rule_repo.source_chats(session, rule=rule)
-        destinations = await rule_repo.destination_chats(session, rule=rule)
-        jobs = await job_repo.get_for_rule(
-            session,
-            rule_id=rule.id,
-            statuses=[
-                JobStatus.pending,
-                JobStatus.succeeded,
-                JobStatus.failed,
-                JobStatus.skipped,
-                JobStatus.needs_attention,
-                JobStatus.dead_letter,
-            ],
-        )
-        preview = await rule_service.preview_for(session, rule=rule)
-        screen = views.rule_detail(
-            rule=rule,
-            source_titles=[c.title for c in sources],
-            destination_count=len(destinations),
-            job_counts=views.job_counts([j.status for j in jobs]),
-            preview=preview,
-        )
-
-    await _render(query, screen)
-    await query.answer(notice or "")
-
-
 # --------------------------------------------------------------------------- #
 # Premium icons (operators only)
 # --------------------------------------------------------------------------- #

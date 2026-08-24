@@ -2,8 +2,14 @@
 
 The property under test throughout this file is a negative one — that no
 automatic reply can reach someone who did not message the account first. Every
-test here either exercises that boundary or the cooldown that keeps a single
-answer from becoming repeat messaging.
+test here either exercises that boundary, the cooldown that keeps a single
+answer from becoming repeat messaging, or the newer condition: replies only go
+out while the account is advertising.
+
+That last one is why ``build`` creates a running ad. An account that answers
+strangers at three in the morning with no ad in sight is behaving like a bot;
+one that answers while it is advertising is answering the people who saw the
+ad.
 """
 
 from __future__ import annotations
@@ -28,7 +34,14 @@ OTHER_WRITER_ID = 500_100_201
 GROUP_ID = -1002000
 
 
-async def build(actor, session, *, enabled: bool = True, body: str = "Thanks for writing!") -> dict:
+async def build(
+    actor,
+    session,
+    *,
+    enabled: bool = True,
+    body: str = "Thanks for writing!",
+    advertising: bool = True,
+) -> dict:
     connection_id = await connect_bot(actor)
     connection = await session.get(TelegramConnection, uuid.UUID(connection_id))
     connection.status = ConnectionStatus.active
@@ -43,8 +56,27 @@ async def build(actor, session, *, enabled: bool = True, body: str = "Thanks for
         await autoreply_repo.upsert(
             session, user_id=uuid.UUID(actor.id), connection_id=connection.id, enabled=True
         )
+    if advertising:
+        await _running_ad(session, actor, connection)
     await session.commit()
     return {"connection_id": connection_id, "connection": connection}
+
+
+async def _running_ad(session, actor, connection):
+    """An ad in flight, which is what auto-reply now keys off."""
+    from app.db.models import BroadcastStatus
+    from app.repositories import broadcasts as broadcast_repo
+
+    broadcast = await broadcast_repo.create(
+        session,
+        user_id=uuid.UUID(actor.id),
+        connection_id=connection.id,
+        name="Running",
+        delay_ms=0,
+    )
+    broadcast.status = BroadcastStatus.sending
+    await session.flush()
+    return broadcast
 
 
 async def incoming(session, ctx, *, peer_id: int = WRITER_ID, kind: PeerKind = PeerKind.user):
@@ -345,3 +377,90 @@ def test_there_is_no_way_to_send_to_a_list():
     for name in public:
         assert "broadcast" not in name.lower()
         assert "all" not in name.lower().split("_")
+
+
+# --------------------------------------------------------------------------- #
+# Only while advertising
+# --------------------------------------------------------------------------- #
+async def test_no_ad_means_no_reply(client, actor, session):
+    """The account is not advertising, so it stays quiet — which is the whole
+    point of tying the two together."""
+    ctx = await build(actor, session, advertising=False)
+    decision = await incoming(session, ctx)
+
+    assert not decision.sent
+    assert decision.reason_code == reasons.AUTO_REPLY_NOT_ADVERTISING
+    assert script_for(ctx["connection_id"]).calls_to("send_text") == []
+
+
+async def test_a_repeating_ad_keeps_replies_alive_between_rounds(client, actor, session):
+    """A repeating ad stays ``sending`` while it waits for its next round, and
+    people write in during that gap — most of them, in fact."""
+    from app.db.models import Broadcast, BroadcastStatus
+
+    ctx = await build(actor, session)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    broadcast.repeat_every_s = 7200
+    broadcast.next_run_at = datetime.now(UTC) + timedelta(hours=2)
+    assert broadcast.status is BroadcastStatus.sending
+    await session.commit()
+
+    assert (await incoming(session, ctx)).sent
+
+
+async def test_replies_continue_for_a_while_after_the_ad_finishes(client, actor, session):
+    """A one-shot ad is over in a minute; the people who saw it are not."""
+    from app.config import get_settings
+    from app.db.models import Broadcast, BroadcastStatus
+
+    ctx = await build(actor, session)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    broadcast.status = BroadcastStatus.completed
+    broadcast.completed_at = datetime.now(UTC) - timedelta(
+        hours=get_settings().auto_reply_after_ad_hours - 1
+    )
+    await session.commit()
+
+    assert (await incoming(session, ctx)).sent
+
+
+async def test_replies_stop_once_the_window_has_passed(client, actor, session):
+    from app.config import get_settings
+    from app.db.models import Broadcast, BroadcastStatus
+
+    ctx = await build(actor, session)
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    broadcast.status = BroadcastStatus.completed
+    broadcast.completed_at = datetime.now(UTC) - timedelta(
+        hours=get_settings().auto_reply_after_ad_hours + 1
+    )
+    await session.commit()
+
+    decision = await incoming(session, ctx)
+    assert not decision.sent
+    assert decision.reason_code == reasons.AUTO_REPLY_NOT_ADVERTISING
+
+
+async def test_another_accounts_ad_does_not_unlock_your_replies(
+    client, actor, other_actor, session
+):
+    """The window is per account. Someone else advertising says nothing about
+    whether people are writing to you."""
+    from app.db.models import BroadcastStatus, TelegramConnection
+    from app.repositories import broadcasts as broadcast_repo
+
+    ctx = await build(actor, session, advertising=False)
+
+    theirs_id = await connect_bot(other_actor)
+    theirs = await session.get(TelegramConnection, uuid.UUID(theirs_id))
+    running = await broadcast_repo.create(
+        session,
+        user_id=uuid.UUID(other_actor.id),
+        connection_id=theirs.id,
+        name="Theirs",
+        delay_ms=0,
+    )
+    running.status = BroadcastStatus.sending
+    await session.commit()
+
+    assert not (await incoming(session, ctx)).sent

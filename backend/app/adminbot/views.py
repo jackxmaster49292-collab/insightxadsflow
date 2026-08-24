@@ -31,7 +31,6 @@ from app.db.models import (
     BroadcastStatus,
     ForwardingRule,
     JobStatus,
-    RuleStatus,
     TelegramConnection,
 )
 from app.domain import reasons
@@ -171,10 +170,8 @@ def home(
         "already joined\\. Set how fast, set how often it repeats, and see "
         "which groups received it\\.",
         "",
-        "💬 *Auto\\-reply* — answer people who message your account first, once "
-        "each\\. It cannot start a conversation\\.",
-        "",
-        "📋 *Forwarding* — copy new messages from one chat into others, automatically\\.",
+        "💬 *Auto\\-reply* — answer people who message your account first while "
+        "an ad of yours is running\\. It cannot start a conversation\\.",
     ]
 
     if not connections:
@@ -189,10 +186,7 @@ def home(
         "\n".join(lines),
         _rows(
             [InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")],
-            [
-                InlineKeyboardButton(text="💬 Auto-reply", callback_data="nav:autoreply"),
-                InlineKeyboardButton(text="📋 Forwarding", callback_data="nav:rules:0"),
-            ],
+            [InlineKeyboardButton(text="💬 Auto-reply", callback_data="nav:autoreply")],
             [
                 InlineKeyboardButton(text="🔗 Accounts", callback_data="nav:conns"),
                 InlineKeyboardButton(text="💭 Groups", callback_data="nav:chats:0"),
@@ -340,7 +334,6 @@ def premium_icons_status(
 RENAMEABLE_BUTTONS: tuple[str, ...] = (
     "📣 Ads",
     "💬 Auto-reply",
-    "📋 Forwarding",
     "🔗 Accounts",
     "💭 Groups",
     "📊 Activity",
@@ -1262,6 +1255,19 @@ def archive_settings(
 PICK = "pk:"
 
 
+def confirm_delete_ad(*, broadcast: Broadcast) -> Screen:
+    return Screen(
+        f"🗑 *Delete {escape(broadcast.name)}?*\n\n"
+        "This removes the ad and its record of which groups received it\\.\n\n"
+        "Messages already posted stay where they are — deleting cannot unsend "
+        "anything\\.",
+        _rows(
+            [InlineKeyboardButton(text="Yes, delete", callback_data=f"ad:{broadcast.id}:del")],
+            [InlineKeyboardButton(text="Cancel", callback_data=f"ad:{broadcast.id}")],
+        ),
+    )
+
+
 def group_picker(
     *,
     chats: Sequence,  # type: ignore[type-arg]
@@ -1382,139 +1388,6 @@ def autoreply_screen(*, connection: TelegramConnection | None, reply: AutoReply 
 # --------------------------------------------------------------------------- #
 # Forwarding rules
 # --------------------------------------------------------------------------- #
-def rules_list(*, rules: Sequence[ForwardingRule], page: int, can_create: bool) -> Screen:
-    if not rules:
-        lines = [
-            "📋 *Forwarding*",
-            "",
-            "Copies new messages from a chat you follow into groups you choose\\.",
-            "",
-            "No rules yet\\.",
-        ]
-        if not can_create:
-            lines += ["", "Connect an account first — *Accounts* on the home screen\\."]
-        return Screen(
-            "\n".join(lines),
-            _rows(
-                [InlineKeyboardButton(text="➕ New rule", callback_data="rule:new")]
-                if can_create
-                else [],
-                _home_row(),
-            ),
-        )
-
-    window, page, pages = _page_of(rules, page, PAGE_SIZE)
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=f"{icon(rule.status.value)} {rule.name[:36]}",
-                callback_data=f"rule:{rule.id}",
-            )
-        ]
-        for rule in window
-    ]
-
-    return Screen(
-        f"📋 *Forwarding rules* \\({len(rules)}\\)",
-        InlineKeyboardMarkup(
-            inline_keyboard=[
-                *buttons,
-                _pager("nav:rules:", page, pages),
-                [InlineKeyboardButton(text="➕ New rule", callback_data="rule:new")]
-                if can_create
-                else [],
-                _home_row(),
-            ]
-        ),
-    )
-
-
-def rule_detail(
-    *,
-    rule: ForwardingRule,
-    source_titles: Sequence[str],
-    destination_count: int,
-    job_counts: dict[str, int],
-    preview: str,
-) -> Screen:
-    lines = [
-        f"{icon(rule.status.value)} *{escape(rule.name)}*",
-        "",
-        f"*Status* — {escape(rule.status.value)}",
-    ]
-    if rule.paused_reason_code:
-        lines.append(f"*Reason* — {escape(reasons.describe(rule.paused_reason_code))}")
-
-    lines += [
-        f"*From* — {escape(', '.join(source_titles) or 'none')}",
-        f"*To* — {destination_count} groups",
-        f"*Pause between groups* — {rule.delay_ms} ms",
-        "",
-        "_" + escape(preview) + "_",
-    ]
-
-    if job_counts:
-        lines += [
-            "",
-            "*Deliveries* — "
-            + " · ".join(f"{icon(s)} {c} {escape(s)}" for s, c in sorted(job_counts.items())),
-        ]
-
-    controls: list[InlineKeyboardButton] = []
-    if rule.status is RuleStatus.active:
-        controls.append(InlineKeyboardButton(text="⏸ Pause", callback_data=f"rule:{rule.id}:pause"))
-    else:
-        controls.append(
-            InlineKeyboardButton(text="▶️ Resume", callback_data=f"rule:{rule.id}:resume")
-        )
-    controls.append(
-        InlineKeyboardButton(text="🔁 Retry failed", callback_data=f"rule:{rule.id}:retry")
-    )
-
-    return Screen(
-        "\n".join(lines),
-        _rows(
-            controls,
-            [
-                InlineKeyboardButton(
-                    text=f"💭 Groups ({destination_count})",
-                    callback_data=f"rule:{rule.id}:pick",
-                )
-            ],
-            [
-                InlineKeyboardButton(text="📊 Events", callback_data=f"rule:{rule.id}:events"),
-                InlineKeyboardButton(text="🗑 Delete", callback_data=f"rule:{rule.id}:askdel"),
-            ],
-            [InlineKeyboardButton(text="⬅️ Rules", callback_data="nav:rules:0"), *_home_row()],
-        ),
-    )
-
-
-def confirm_delete_ad(*, broadcast: Broadcast) -> Screen:
-    return Screen(
-        f"🗑 *Delete {escape(broadcast.name)}?*\n\n"
-        "This removes the ad and its record of which groups received it\\.\n\n"
-        "Messages already posted stay where they are — deleting cannot unsend "
-        "anything\\.",
-        _rows(
-            [InlineKeyboardButton(text="Yes, delete", callback_data=f"ad:{broadcast.id}:del")],
-            [InlineKeyboardButton(text="Cancel", callback_data=f"ad:{broadcast.id}")],
-        ),
-    )
-
-
-def confirm_delete_rule(*, rule: ForwardingRule) -> Screen:
-    return Screen(
-        f"🗑 *Delete {escape(rule.name)}?*\n\n"
-        "The rule and its delivery history go away\\. Messages it already "
-        "forwarded stay where they are\\.",
-        _rows(
-            [InlineKeyboardButton(text="Yes, delete", callback_data=f"rule:{rule.id}:delete")],
-            [InlineKeyboardButton(text="Cancel", callback_data=f"rule:{rule.id}")],
-        ),
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Groups and activity
 # --------------------------------------------------------------------------- #
