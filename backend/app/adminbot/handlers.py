@@ -326,7 +326,11 @@ async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
 
 
 @router.callback_query(F.data.startswith("nav:arch"))
-async def nav_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+async def nav_archive(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    if not await _require_operator(query, is_operator):
+        return
     await _render(query, await _archive_screen(user_id, page=_page_from(query.data or "")))
     await query.answer()
 
@@ -336,7 +340,11 @@ async def nav_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -
 # button reported "that group is not in your list" because this handler read
 # "bot" as a chat id.
 @router.callback_query(F.data.startswith("arch:s:") | (F.data == "arch:off"))
-async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+async def set_archive(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    if not await _require_operator(query, is_operator):
+        return
     parts = (query.data or "").split(":")
     verb = parts[1] if len(parts) > 1 else ""
 
@@ -373,8 +381,14 @@ async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -
 
 @router.callback_query(F.data == "arch:bot")
 async def archive_by_bot(
-    query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+    query: CallbackQuery,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
 ) -> None:
+    if not await _require_operator(query, is_operator):
+        return
     await state.clear()
     await state.set_state(SetArchive.chat)
     if isinstance(query.message, Message):
@@ -390,8 +404,18 @@ async def archive_by_bot(
 
 @router.message(SetArchive.chat)
 async def archive_chat_given(
-    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+    message: Message,
+    user_id: uuid.UUID,
+    state: FSMContext,
+    is_operator: bool = False,
+    **_extra: Any,
 ) -> None:
+    # A conversation state is not authorization: someone could be left in this
+    # state by a change of operator list, and the check belongs here anyway.
+    if not is_operator:
+        await state.clear()
+        await _go_home(message, user_id)
+        return
     chat_id = _forwarded_chat_id(message)
     if chat_id is None:
         raw = (message.text or "").strip()

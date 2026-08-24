@@ -20,6 +20,24 @@ from app.services import broadcast as broadcast_service
 from tests.conftest import script_for
 from tests.integration.test_broadcast import build_broadcast, drain, group_id
 
+
+@pytest.fixture(autouse=True)
+async def as_operator(actor, session, monkeypatch):
+    """The archive is operator-only, so the tests run as one.
+
+    Not a convenience: it is the shape of the feature. The negative cases below
+    take this fixture away deliberately.
+    """
+    from app.config import get_settings
+    from app.repositories import users as user_repo
+    from tests.integration.test_bot_flows import ADMIN_CHAT
+
+    user = await user_repo.get_by_id(session, uuid.UUID(actor.id))
+    user.telegram_user_id = ADMIN_CHAT
+    await session.commit()
+    monkeypatch.setattr(get_settings(), "admin_telegram_ids", str(ADMIN_CHAT), raising=False)
+
+
 AD_ENTITIES = [
     {"type": "bold", "offset": 0, "length": 6},
     {"type": "custom_emoji", "offset": 7, "length": 2, "custom_emoji_id": "5368324170671202286"},
@@ -229,7 +247,9 @@ async def test_another_accounts_chat_cannot_become_your_archive(
     ctx = await build_broadcast(other_actor, session, groups=1)
     theirs = ctx["chat_ids"][0]
 
-    await handlers.set_archive(a_callback(f"arch:s:{theirs}"), user_id=uuid.UUID(actor.id))
+    await handlers.set_archive(
+        a_callback(f"arch:s:{theirs}"), user_id=uuid.UUID(actor.id), is_operator=True
+    )
 
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
     assert setting is None or setting.archive_chat_id is None
@@ -242,13 +262,17 @@ async def test_the_archive_screen_can_be_set_and_turned_off(client, actor, state
     ctx = await build_broadcast(actor, session, groups=2)
     mine = ctx["chat_ids"][0]
 
-    await handlers.set_archive(a_callback(f"arch:s:{mine}"), user_id=uuid.UUID(actor.id))
+    await handlers.set_archive(
+        a_callback(f"arch:s:{mine}"), user_id=uuid.UUID(actor.id), is_operator=True
+    )
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
     await session.refresh(setting)
     assert setting.archive_chat_id == mine
     assert "Group" in Sent.last()
 
-    await handlers.set_archive(a_callback("arch:off"), user_id=uuid.UUID(actor.id))
+    await handlers.set_archive(
+        a_callback("arch:off"), user_id=uuid.UUID(actor.id), is_operator=True
+    )
     await session.refresh(setting)
     assert setting.archive_chat_id is None
 
@@ -653,7 +677,7 @@ async def test_setting_one_route_clears_the_other(client, actor, state, session)
     await _bot_archive(session, actor)
 
     await handlers.set_archive(
-        a_callback(f"arch:s:{ctx['chat_ids'][0]}"), user_id=uuid.UUID(actor.id)
+        a_callback(f"arch:s:{ctx['chat_ids'][0]}"), user_id=uuid.UUID(actor.id), is_operator=True
     )
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
     await session.refresh(setting)
@@ -666,7 +690,9 @@ async def test_turning_it_off_clears_both_routes(client, actor, state, session):
     from tests.integration.test_bot_flows import a_callback
 
     await _bot_archive(session, actor)
-    await handlers.set_archive(a_callback("arch:off"), user_id=uuid.UUID(actor.id))
+    await handlers.set_archive(
+        a_callback("arch:off"), user_id=uuid.UUID(actor.id), is_operator=True
+    )
 
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
     await session.refresh(setting)
@@ -688,7 +714,10 @@ async def test_the_id_is_proved_before_it_is_saved(client, actor, state, session
     )
     await state.set_state(SetArchive.chat)
     await handlers.archive_chat_given(
-        a_message(str(BOT_GROUP_ID)), user_id=uuid.UUID(actor.id), state=state
+        a_message(str(BOT_GROUP_ID)),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
     )
 
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
@@ -703,7 +732,10 @@ async def test_a_proved_id_is_saved_and_announced(client, actor, state, session)
 
     await state.set_state(SetArchive.chat)
     await handlers.archive_chat_given(
-        a_message(str(BOT_GROUP_ID)), user_id=uuid.UUID(actor.id), state=state
+        a_message(str(BOT_GROUP_ID)),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
     )
 
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
@@ -722,7 +754,7 @@ async def test_nonsense_instead_of_an_id_is_explained(client, actor, state, sess
 
     await state.set_state(SetArchive.chat)
     await handlers.archive_chat_given(
-        a_message("my group"), user_id=uuid.UUID(actor.id), state=state
+        a_message("my group"), user_id=uuid.UUID(actor.id), state=state, is_operator=True
     )
 
     assert "not a chat id" in Sent.last()
@@ -749,7 +781,9 @@ async def test_a_forwarded_message_supplies_the_id(client, actor, state, session
     )
 
     await state.set_state(SetArchive.chat)
-    await handlers.archive_chat_given(forwarded, user_id=uuid.UUID(actor.id), state=state)
+    await handlers.archive_chat_given(
+        forwarded, user_id=uuid.UUID(actor.id), state=state, is_operator=True
+    )
 
     setting = await session.get(AppSetting, uuid.UUID(actor.id))
     await session.refresh(setting)
@@ -769,3 +803,101 @@ def test_the_screen_offers_both_routes_and_explains_the_difference():
     assert "if the posting account is ever gone" in screen.text
     assert_valid_markdown_v2(screen.text)
     assert_keyboard_is_sendable(screen.keyboard)
+
+
+# --------------------------------------------------------------------------- #
+# Operator only — the admin id and nowhere else
+# --------------------------------------------------------------------------- #
+async def test_a_non_operator_cannot_open_the_archive_screen(client, actor, state):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import Sent, a_callback
+
+    await handlers.nav_archive(
+        a_callback("nav:arch:0"), user_id=uuid.UUID(actor.id), is_operator=False
+    )
+    assert any("not available" in alert for alert in Sent.alerts)
+
+
+async def test_a_non_operator_cannot_set_an_archive(client, actor, state, session):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback
+
+    ctx = await build_broadcast(actor, session, groups=1)
+    await handlers.set_archive(
+        a_callback(f"arch:s:{ctx['chat_ids'][0]}"),
+        user_id=uuid.UUID(actor.id),
+        is_operator=False,
+    )
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    assert setting is None or setting.archive_chat_id is None
+
+
+async def test_a_non_operator_left_mid_flow_is_shown_the_door(client, actor, state, session):
+    """Being in a conversation state is not authorization — an operator list
+    can change between the question and the answer."""
+    from app.adminbot import handlers
+    from app.adminbot.states import SetArchive
+    from tests.integration.test_bot_flows import a_message
+
+    await state.set_state(SetArchive.chat)
+    await handlers.archive_chat_given(
+        a_message(str(BOT_GROUP_ID)),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=False,
+    )
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    assert setting is None or setting.archive_bot_chat_id is None
+    assert await state.get_state() is None, "and not left stuck in the flow"
+
+
+async def test_a_row_belonging_to_a_non_operator_archives_nothing(
+    client, actor, session, monkeypatch
+):
+    """The layer that holds however a row got written: a leftover from before
+    the feature was restricted, a direct database edit, a future API."""
+    from app.config import get_settings
+    from app.services import archive as archive_service
+
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+
+    # Same row, same setting — the account simply is not an operator any more.
+    monkeypatch.setattr(get_settings(), "admin_telegram_ids", "", raising=False)
+    assert await archive_service.destination_for(session, user_id=uuid.UUID(actor.id)) is None
+
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert _bot_script().calls_to("send_text") == [], "nothing archived"
+
+
+def test_the_archive_button_is_operator_only():
+    from types import SimpleNamespace
+
+    from app.adminbot import views
+
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Jack",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+    )
+
+    def buttons(is_operator: bool) -> list[str]:
+        screen = views.home(
+            connections=[connection],
+            rules=[],
+            broadcasts=[],
+            counts={},
+            is_operator=is_operator,
+        )
+        return [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+
+    assert "nav:arch:0" in buttons(True)
+    assert "nav:arch:0" not in buttons(False)

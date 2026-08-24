@@ -896,6 +896,21 @@ the same outage, in the two most-used buttons in the panel. The sweep is built
 by rendering screens rather than from a list of strings, because a list is the
 thing that stops matching the code it describes.
 
+### ADR-064 — The archive is operator-only, and the service is the gate
+**Context.** The archive shipped on the home screen for every user. The
+operator asked for it on the admin id and nowhere else — reasonable, since it
+copies ad content into a chat the deployment's owner controls.
+**Decision.** Three layers, and the third is the one that counts. The button
+moves into the operator row. The handlers call ``_require_operator``, and the
+message step checks too — being in a conversation state is not authorization,
+since an operator list can change between the question and the answer. And
+``destination_for`` refuses for a non-operator regardless of what the row says.
+**Consequence.** "Only the admin id, nowhere else" becomes a property of the
+system rather than of one screen: a row left from before the restriction, a
+direct database edit, or a future API all archive nothing.
+``test_a_row_belonging_to_a_non_operator_archives_nothing`` holds that by
+revoking operator status with the setting already saved.
+
 ---
 
 ## Open tradeoffs

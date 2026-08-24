@@ -286,7 +286,7 @@ slow mode adds its own.
 
 ### Keeping your own copy (Archive)
 
-**🗄 Archive** on the home screen picks one group to keep copies in. Make a
+**🗄 Archive** (operators only) picks one group to keep copies in. Make a
 group, keep it to yourself, and point this at it. There are two ways, and they
 differ in *who* posts the copies:
 

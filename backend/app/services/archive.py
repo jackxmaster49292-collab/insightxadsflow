@@ -31,6 +31,7 @@ from app.db.models import (
     BroadcastTarget,
     JobStatus,
     TelegramChat,
+    User,
 )
 from app.domain.message_links import LinkKind, link_for
 from app.repositories import chats as chat_repo
@@ -100,6 +101,17 @@ async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Desti
     insured against. The account route stays for anyone who would rather the
     copies come from the same account that posted them.
     """
+    # Operator-only, checked here and not just in the panel. The screens hide
+    # the control and the handlers refuse the callback, but this is the layer
+    # that holds however a row got written — a leftover from before the feature
+    # was restricted, a direct database edit, a future API. "Only the admin id,
+    # nowhere else" is a property of the system, not of one screen.
+    owner = await session.get(User, user_id)
+    if owner is None or owner.telegram_user_id is None:
+        return None
+    if not get_settings().is_admin(owner.telegram_user_id):
+        return None
+
     setting = await session.get(AppSetting, user_id)
     if setting is None:
         return None

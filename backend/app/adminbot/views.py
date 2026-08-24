@@ -322,16 +322,14 @@ def home(
                 InlineKeyboardButton(text="📊 Activity", callback_data="nav:activity"),
                 InlineKeyboardButton(text="🔄 Refresh", callback_data="nav:home"),
             ],
-            [
-                InlineKeyboardButton(text="🗄 Archive", callback_data="nav:arch:0"),
-                InlineKeyboardButton(text="ℹ️ About", callback_data="nav:about"),
-            ],
+            [InlineKeyboardButton(text="ℹ️ About", callback_data="nav:about")],
             # Only operators see this, and only they can reach the handler —
             # hiding the button is presentation, the middleware is the gate.
             [
                 InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0"),
                 InlineKeyboardButton(text="✨ Icons", callback_data="op:emoji"),
                 InlineKeyboardButton(text="🔤 Buttons", callback_data="op:btn:0"),
+                InlineKeyboardButton(text="🗄 Archive", callback_data="nav:arch:0"),
             ]
             if is_operator
             else [],
