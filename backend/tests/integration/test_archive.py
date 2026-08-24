@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.db.models import (
     AppSetting,
     Broadcast,
+    BroadcastStatus,
     BroadcastTarget,
     ChatKind,
     TelegramChat,
@@ -1004,3 +1005,58 @@ async def test_the_account_route_says_so_when_it_has_no_courier(client, actor, s
 
     sent = await archive_service.store_round(session, broadcast=broadcast, adapter=None)
     assert sent == 0, "refused, and logged — not silently treated as unconfigured"
+
+
+async def test_a_paused_then_resumed_ad_archives_everything_it_sent(client, actor, session):
+    """Pause is not an ending, so it files nothing — but the deliveries made
+    before it must still appear when the round finally finishes. Archiving on
+    pause instead would file a partial record and then a full one, and two
+    conflicting copies of the same round is worse than one late one."""
+    from app.domain import reasons
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == broadcast.id)
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    connection = await session.get(TelegramConnection, broadcast.connection_id)
+    from app.services import connections as connection_service
+
+    adapter = await connection_service.adapter_for(session, connection)
+
+    # One group, then a pause.
+    await broadcast_service.execute_target(
+        session, target=targets[0], adapter=adapter, connection=connection
+    )
+    await broadcast_service.pause(
+        session, broadcast=broadcast, reason_code=reasons.BROADCAST_PAUSED_BY_CUSTOMER
+    )
+    await session.commit()
+    assert _bot_script().calls_to("send_text") == [], "a pause is not an ending"
+
+    # Resumed, and the rest go out.
+    broadcast.status = BroadcastStatus.sending
+    broadcast.paused_reason_code = None
+    await session.commit()
+    for target in targets[1:]:
+        await broadcast_service.execute_target(
+            session, target=target, adapter=adapter, connection=connection
+        )
+    await session.commit()
+
+    index = _bot_script().calls_to("send_text")[-1].args[1]
+    assert "3 groups" in index
+    for title in ("Group 01", "Group 02", "Group 03"):
+        assert title in index, "including the one delivered before the pause"
