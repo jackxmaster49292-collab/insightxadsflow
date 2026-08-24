@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -874,6 +874,7 @@ def ad_compose(
     estimate_s: float,
     account_is_premium: bool = True,
     premium_checked: bool = True,
+    tz: tzinfo | None = None,
 ) -> Screen:
     """The compose screen, for a draft and for editing an ad already running.
 
@@ -923,6 +924,7 @@ def ad_compose(
         f"*Groups* — {target_count} selected",
         f"*Pause between groups* — {seconds_label(broadcast.delay_ms)}",
         f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}",
+        f"*Starts* — {escape(start_label(broadcast.scheduled_for, tz))}",
     ]
     if target_count:
         lines.append(f"*Takes about* — {escape(humanize(estimate_s))} per round")
@@ -959,7 +961,10 @@ def ad_compose(
                 InlineKeyboardButton(text="🖼 Image", callback_data=f"ad:{broadcast.id}:media"),
                 InlineKeyboardButton(text="⚡ Speed", callback_data=f"ad:{broadcast.id}:speed"),
             ],
-            [InlineKeyboardButton(text="🔁 Repeat", callback_data=f"ad:{broadcast.id}:repeat")],
+            [
+                InlineKeyboardButton(text="🔁 Repeat", callback_data=f"ad:{broadcast.id}:repeat"),
+                InlineKeyboardButton(text="🕒 Start at", callback_data=f"ad:{broadcast.id}:sched"),
+            ],
             [
                 InlineKeyboardButton(
                     text=f"💭 Groups ({target_count})",
@@ -1537,6 +1542,16 @@ def seconds_label(milliseconds: int) -> str:
     all. Formatting and escaping happen together so they cannot drift apart.
     """
     return escape(f"{milliseconds / 1000:.1f}s")
+
+
+def start_label(scheduled_for: datetime | None, tz: tzinfo | None = None) -> str:
+    """When an ad begins, in the customer's own clock and in plain relative
+    words. Both, because a wrong timezone looks fine in the first form and
+    obviously wrong in the second."""
+    if scheduled_for is None:
+        return "as soon as you send it"
+    local = scheduled_for.astimezone(tz) if tz is not None else scheduled_for
+    return f"{local.strftime('%d %b, %H:%M')} — {when(scheduled_for)}"
 
 
 def repeat_label(repeat_every_s: int | None) -> str:

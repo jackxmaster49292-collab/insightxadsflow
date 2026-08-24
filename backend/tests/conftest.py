@@ -214,6 +214,7 @@ def fake_broadcast(**overrides):
         "repeat_every_s": None,
         "repeat_count": 0,
         "next_run_at": None,
+        "scheduled_for": None,
     }
     fields.update(overrides)
     return SimpleNamespace(**fields)

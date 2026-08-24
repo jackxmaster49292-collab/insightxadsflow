@@ -20,6 +20,7 @@ import contextlib
 import math
 import re
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -1263,6 +1264,62 @@ def _parse_interval(text: str) -> int | None:
     return int(total)
 
 
+@router.message(ComposeAd.schedule)
+async def ad_schedule(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    from app.domain import when as when_domain
+
+    raw = (message.text or "").strip()
+    async with session_scope() as session:
+        setting = await user_repo.get_settings_row(session, user_id=user_id)
+        tz_name = setting.timezone if setting else "UTC"
+
+    if raw.lower() in ("now", "0"):
+        start_at = None
+    elif when_domain.is_a_zone(raw):
+        # They answered with a timezone instead of a time, which is what
+        # someone does when the confirmed time came back wrong.
+        async with session_scope() as session:
+            setting = await user_repo.get_settings_row(session, user_id=user_id)
+            if setting is not None:
+                setting.timezone = raw
+        await _ask(
+            message,
+            f"Timezone set to `{views.escape(raw)}`\\. Now send the time\\.",
+        )
+        return
+    else:
+        start_at = when_domain.parse_when(raw, now=datetime.now(UTC), tz=when_domain.zone(tz_name))
+        if start_at is None:
+            await _ask(
+                message,
+                "That is not a time I can read\\. Try `21:30`, `2h`, `1d`, or "
+                "`now`\\.\n\n"
+                "If the times keep coming back wrong, send your timezone "
+                "instead — like `Asia/Kolkata`\\.",
+            )
+            return
+
+    data = await state.get_data()
+    broadcast_id = views.as_uuid(data.get("broadcast_id"))
+    if broadcast_id is None:
+        await state.clear()
+        await _go_home(message, user_id)
+        return
+
+    async with session_scope() as session:
+        broadcast = await broadcast_repo.get(session, user_id=user_id, broadcast_id=broadcast_id)
+        if broadcast is None:
+            await state.clear()
+            await _go_home(message, user_id)
+            return
+        broadcast.scheduled_for = start_at
+
+    await state.set_state(None)
+    await _send(message, await _compose_screen(user_id, broadcast_id))
+
+
 @router.message(ComposeAd.repeat)
 async def ad_repeat(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
     seconds = _parse_interval(message.text or "")
@@ -1312,6 +1369,19 @@ async def ad_repeat(message: Message, user_id: uuid.UUID, state: FSMContext, **_
     await _send(message, await _compose_screen(user_id, broadcast_id))
 
 
+async def _timezone_of(session, user_id: uuid.UUID):  # type: ignore[no-untyped-def]
+    """The clock a start time should be shown in.
+
+    Without this every scheduled time renders in UTC, which for most people is
+    a plausible-looking number that is hours wrong — the failure mode a start
+    time can least afford.
+    """
+    from app.domain import when as when_domain
+
+    setting = await user_repo.get_settings_row(session, user_id=user_id)
+    return when_domain.zone(setting.timezone if setting else "UTC")
+
+
 async def _compose_screen(user_id: uuid.UUID, broadcast_id: uuid.UUID) -> views.Screen:
     async with session_scope() as session:
         broadcast = await broadcast_repo.get(session, user_id=user_id, broadcast_id=broadcast_id)
@@ -1322,6 +1392,7 @@ async def _compose_screen(user_id: uuid.UUID, broadcast_id: uuid.UUID) -> views.
             broadcast=broadcast,
             target_count=len(target_ids),
             estimate_s=broadcast_service.estimated_duration_s(broadcast.delay_ms, len(target_ids)),
+            tz=await _timezone_of(session, user_id),
         )
 
 
@@ -1341,6 +1412,16 @@ _AD_PROMPTS = {
         ComposeAd.delay,
         "How many seconds between groups? `3` is a sensible default — it keeps "
         "one ad comfortably inside Telegram's limits\\.",
+    ),
+    "sched": (
+        ComposeAd.schedule,
+        "When should this ad start?\n\n"
+        "`21:30` — at that time, tonight or tomorrow\n"
+        "`2h` — in two hours\n"
+        "`1d` — this time tomorrow\n"
+        "`now` — no waiting\n\n"
+        "I will read a clock time in your timezone and show you the answer "
+        "both ways, so a wrong timezone is obvious\\.",
     ),
     "repeat": (
         ComposeAd.repeat,
@@ -1547,20 +1628,35 @@ async def ad_actions(
                 await broadcast_repo.reopen_for_repeat(
                     session, broadcast=broadcast, start_at=broadcast_repo.now()
                 )
-            try:
-                queued = await broadcast_service.queue(session, broadcast=broadcast)
-            except broadcast_service.BroadcastValidationError as exc:
-                await query.answer(exc.message, show_alert=True)
-                return
-            await event_repo.audit(
-                session,
-                user_id=user_id,
-                action="broadcast.send",
-                object_type="broadcast",
-                object_id=str(broadcast.id),
-                payload={"via": "telegram", "targets": queued},
-            )
-            notice = f"Sending to {queued} groups."
+            # A start time turns Send into "put it in the queue for later".
+            # The ad is validated *now* either way — finding out at 6am that it
+            # had no groups would be the worst possible moment.
+            if broadcast.scheduled_for and broadcast.scheduled_for > datetime.now(UTC):
+                try:
+                    broadcast_service.validate(
+                        broadcast,
+                        target_count=len(target_ids),
+                    )
+                except broadcast_service.BroadcastValidationError as exc:
+                    await query.answer(exc.message, show_alert=True)
+                    return
+                broadcast.status = BroadcastStatus.scheduled
+                notice = "Scheduled."
+            else:
+                try:
+                    queued = await broadcast_service.queue(session, broadcast=broadcast)
+                except broadcast_service.BroadcastValidationError as exc:
+                    await query.answer(exc.message, show_alert=True)
+                    return
+                await event_repo.audit(
+                    session,
+                    user_id=user_id,
+                    action="broadcast.send",
+                    object_type="broadcast",
+                    object_id=str(broadcast.id),
+                    payload={"via": "telegram", "targets": queued},
+                )
+                notice = f"Sending to {queued} groups."
 
         elif action == "pause":
             from app.domain import reasons
@@ -1611,6 +1707,7 @@ async def ad_actions(
                 estimate_s=estimate,
                 account_is_premium=is_premium,
                 premium_checked=premium_checked,
+                tz=await _timezone_of(session, user_id),
             )
         else:
             screen = views.ad_detail(

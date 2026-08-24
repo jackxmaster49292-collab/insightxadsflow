@@ -1110,6 +1110,37 @@ them up. The practical argument matches the principled one: entering groups
 uninvited is the behaviour Telegram restricts accounts for, and the account at
 risk is the customer's own.
 
+### ADR-078 — An ad can be given a start time, in the customer's own clock
+**Context.** ``scheduled_for`` and ``BroadcastStatus.scheduled`` had been in the
+model since the beginning and nothing used them. Starting an ad meant being
+awake to press Send.
+**Decision.** 🕒 Start at accepts a clock time (``21:30``) or a relative one
+(``2h``, ``1d``, ``3h 30m``), and ``now`` to clear it. The scheduler promotes
+due ads on the reclaim cadence, so 09:00 means within fifteen seconds of it,
+each in its own transaction — one ad that fails validation must not hold up the
+rest of the morning's.
+**Consequence.** Validation happens when *Send* is pressed, not when the timer
+fires: discovering at six in the morning that an ad had no groups is the worst
+possible moment to find out. If it fails at start time anyway — groups deleted
+since — the ad goes back to a draft and an alert says why, rather than
+disappearing.
+
+### ADR-079 — A start time is always confirmed twice
+**Context.** A clock time needs a timezone, and the wrong one is a five-and-a-
+half-hour error that renders as a perfectly plausible number. This is the
+failure mode a start time can least afford, because nobody is watching when it
+misfires.
+**Decision.** Every start time is shown as both an absolute local time *and* a
+relative one — "25 Aug, 11:30 — in about 13.5 hours". A wrong zone is invisible
+in the first form and unmissable in the second. The zone comes from
+``AppSetting.timezone``, and answering the time prompt with a zone name
+(``Asia/Kolkata``) sets it — which is exactly what someone does when the
+confirmation comes back wrong.
+**Consequence.** Relative times bypass the question entirely, so ``2h`` is
+always correct regardless of what the stored zone says. An unparseable zone
+falls back to UTC rather than raising: a bad row should cost a wrong-looking
+time on a screen, not a dead scheduler.
+
 ---
 
 ## Open tradeoffs

@@ -21,6 +21,7 @@ from app import preflight
 from app.config import get_settings
 from app.db.models import (
     AppSession,
+    BroadcastStatus,
     ConnectionStatus,
     ForwardingEvent,
     IdempotencyKey,
@@ -28,10 +29,12 @@ from app.db.models import (
 )
 from app.db.session import dispose_engine, session_scope
 from app.logging_setup import configure_logging
+from app.repositories import admins as admin_repo
 from app.repositories import autoreply as autoreply_repo
 from app.repositories import broadcasts as broadcast_repo
 from app.repositories import jobs as job_repo
 from app.security.ratelimit import close_redis
+from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
 
 log = structlog.get_logger(__name__)
@@ -64,6 +67,55 @@ async def reclaim_loop() -> None:
                 )
         except Exception as exc:
             log.error("reclaim_failed", error=exc)
+        await asyncio.sleep(RECLAIM_INTERVAL_S)
+
+
+async def scheduled_broadcast_loop() -> None:
+    """Start ads whose time has come.
+
+    Runs on the reclaim cadence rather than the minute, so an ad set for 09:00
+    starts within fifteen seconds of it. Each is queued in its own transaction:
+    one ad that fails validation must not stop the rest of the morning's from
+    going out.
+    """
+    while not _shutdown.is_set():
+        try:
+            async with session_scope() as session:
+                due = await broadcast_repo.due_scheduled(session)
+            for broadcast in due:
+                async with session_scope() as session:
+                    fresh = await broadcast_repo.get_unscoped_for_worker(
+                        session, broadcast_id=broadcast.id
+                    )
+                    if fresh is None or fresh.status is not BroadcastStatus.scheduled:
+                        continue
+                    try:
+                        queued = await broadcast_service.queue(session, broadcast=fresh)
+                    except broadcast_service.BroadcastValidationError as exc:
+                        # Back to a draft, and said out loud. An ad that silently
+                        # never ran at 6am is the worst way to find this out.
+                        fresh.status = BroadcastStatus.draft
+                        await admin_repo.notify(
+                            session,
+                            user_id=fresh.user_id,
+                            kind="broadcast_schedule_failed",
+                            title=f"{fresh.name} did not start",
+                            body=f"{exc.message}\n\nIt is back in your ads as a draft.",
+                            dedupe_key=f"schedule_failed:{fresh.id}:{fresh.scheduled_for}",
+                        )
+                        log.warning(
+                            "scheduled_broadcast_rejected",
+                            broadcast_id=str(fresh.id),
+                            reason=exc.message,
+                        )
+                        continue
+                    log.info(
+                        "scheduled_broadcast_started",
+                        broadcast_id=str(fresh.id),
+                        targets=queued,
+                    )
+        except Exception as exc:
+            log.error("scheduled_broadcast_loop_failed", error=exc)
         await asyncio.sleep(RECLAIM_INTERVAL_S)
 
 
@@ -135,6 +187,7 @@ async def run() -> None:
 
     tasks = [
         asyncio.create_task(reclaim_loop()),
+        asyncio.create_task(scheduled_broadcast_loop()),
         asyncio.create_task(health_loop()),
         asyncio.create_task(retention_loop()),
     ]

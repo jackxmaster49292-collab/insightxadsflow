@@ -270,6 +270,25 @@ async def heartbeat(
     )
 
 
+async def due_scheduled(session: AsyncSession, *, limit: int = 20) -> list[Broadcast]:
+    """Ads whose start time has arrived.
+
+    Ordered oldest-first so a backlog after downtime goes out in the order it
+    was asked for, not newest-wins.
+    """
+    result = await session.execute(
+        select(Broadcast)
+        .where(
+            Broadcast.status == BroadcastStatus.scheduled,
+            Broadcast.scheduled_for.isnot(None),
+            Broadcast.scheduled_for <= now(),
+        )
+        .order_by(Broadcast.scheduled_for)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def resume_flood_paused(session: AsyncSession) -> int:
     """Resume broadcasts paused for a Telegram wait, once the wait has passed.
 

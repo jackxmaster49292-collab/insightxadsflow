@@ -252,6 +252,23 @@ one, send the new text (up to 32 characters, one line), and it changes
 everywhere that button appears — stored in the database, surviving restarts.
 Send `-` while renaming to go back to the built-in label.
 
+### Starting later
+
+**🕒 Start at** on the compose screen sets when an ad begins:
+
+* `21:30` — at that time, tonight if it is still to come, otherwise tomorrow
+* `2h`, `90m`, `1d`, `3h 30m` — from now
+* `now` — no waiting
+
+The screen always shows the answer twice — `25 Aug, 11:30 — in about 13.5
+hours` — because a wrong timezone looks perfectly fine as a clock time and
+obviously wrong as a duration. If it comes back wrong, send your timezone at
+the same prompt (`Asia/Kolkata`) and then the time.
+
+Pressing **Send** on a scheduled ad queues it rather than posting: the ad list
+shows it as 🕒 scheduled until its time comes. It is checked for problems when
+you press Send, not at six in the morning.
+
 ### Speed
 
 **⚡ Speed** on the compose screen sets how fast a round works through the
