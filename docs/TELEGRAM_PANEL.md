@@ -286,8 +286,20 @@ slow mode adds its own.
 
 ### Keeping your own copy (Archive)
 
-**🗄 Archive** on the home screen picks one group of yours to keep copies in.
-Make a group, keep it to yourself, and point this at it.
+**🗄 Archive** on the home screen picks one group to keep copies in. Make a
+group, keep it to yourself, and point this at it. There are two ways, and they
+differ in *who* posts the copies:
+
+* **🤖 Use a group the bot is in** — add the bot to the group as an admin who
+  may post, then send its chat id (or forward any message from it). The copies
+  come from the **bot**. Prefer this: the bot keeps working even if the account
+  that posts your ads is ever gone, which is the whole point of an archive.
+  The bot posts one line into the group when you set it, so you find out
+  immediately if it cannot.
+* **Tap one of your own groups** in the list — the copies come from the same
+  account that posts the ads, which has to be a member of that group.
+
+Only one is active at a time; setting either clears the other.
 
 After every round the bot posts two things there, in this order:
 

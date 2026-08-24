@@ -236,6 +236,14 @@ class AppSetting(Base):
     archive_chat_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("telegram_chats.id", ondelete="SET NULL")
     )
+    #: A chat the **admin bot** posts the archive into, by raw Telegram id.
+    #:
+    #: Deliberately not a foreign key to ``telegram_chats``: that table holds
+    #: what a connected *account* can see, and this chat is one the bot was
+    #: added to. It is also the reason this path exists — an archive delivered
+    #: by the account stops the day that account does, which is the very event
+    #: the archive is kept for.
+    archive_bot_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

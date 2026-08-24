@@ -38,6 +38,7 @@ from app.adminbot.states import (
     EditAutoReply,
     EditButton,
     IconSetup,
+    SetArchive,
 )
 from app.config import get_settings
 from app.db.models import (
@@ -312,8 +313,15 @@ async def nav_roles(query: CallbackQuery, **_extra: Any) -> None:
 async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
     async with session_scope() as session:
         chats = await _postable_chats(session, user_id, groups_only=True)
-        current = await archive_service.archive_chat(session, user_id=user_id)
-        title = current.title if current else None
+        setting = await user_repo.get_settings_row(session, user_id=user_id)
+        title = None
+        if setting is not None and setting.archive_bot_chat_id is not None:
+            # No title to show: this chat is one the bot was added to, not one
+            # the account synced, so its id is the only name we honestly have.
+            title = f"chat {setting.archive_bot_chat_id} (via the bot)"
+        else:
+            chat = await archive_service.archive_chat(session, user_id=user_id)
+            title = chat.title if chat else None
     return views.archive_settings(current=title, chats=chats, page=page)
 
 
@@ -338,6 +346,7 @@ async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -
 
         if verb == "off":
             setting.archive_chat_id = None
+            setting.archive_bot_chat_id = None
             notice = "Archive off."
         else:
             chat_id = views.as_uuid(parts[2] if len(parts) > 2 else None)
@@ -350,10 +359,99 @@ async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -
                 await query.answer("That group is not in your list.", show_alert=True)
                 return
             setting.archive_chat_id = chat.id
+            # One destination at a time: two would double every copy.
+            setting.archive_bot_chat_id = None
             notice = f"Copies go to {chat.title}."
 
     await _render(query, await _archive_screen(user_id, page=0))
     await query.answer(notice)
+
+
+@router.callback_query(F.data == "arch:bot")
+async def archive_by_bot(
+    query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    await state.clear()
+    await state.set_state(SetArchive.chat)
+    if isinstance(query.message, Message):
+        await _ask(
+            query.message,
+            "Add me to the group as an *admin* with permission to post, then "
+            "send me its chat id — it looks like `\\-1001234567890`\\.\n\n"
+            "Or just forward me any message from that group and I will read "
+            "the id off it\\.\n\n/cancel to stop\\.",
+        )
+    await query.answer()
+
+
+@router.message(SetArchive.chat)
+async def archive_chat_given(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    chat_id = _forwarded_chat_id(message)
+    if chat_id is None:
+        raw = (message.text or "").strip()
+        try:
+            chat_id = int(raw)
+        except ValueError:
+            await _ask(
+                message,
+                "That is not a chat id\\. Send the number \\(like "
+                "`\\-1001234567890`\\) or forward a message from the group\\.",
+            )
+            return
+
+    # Proved rather than assumed: the bot posts a line into the chat now, so a
+    # missing invite or a missing permission is discovered here instead of
+    # silently swallowing every archive from now on.
+    from app.adapters.base import ChatRef, PeerKind
+    from app.services import archive as archive_service
+
+    bot_adapter = archive_service.bot_adapter()
+    if bot_adapter is None:
+        await _ask(message, "This deployment has no bot token configured\\.")
+        return
+
+    kind = PeerKind.channel if str(chat_id).startswith("-100") else PeerKind.chat
+    try:
+        await bot_adapter.send_text(
+            ChatRef(kind, chat_id),
+            "📁 Archive set up. Copies of every ad will arrive here.",
+        )
+    except Exception as exc:
+        await _ask(
+            message,
+            "I could not post there\\.\n\n"
+            f"_{views.escape(_describe(exc))}_\n\n"
+            "Add me to the group as an admin who may post, then send the id "
+            "again\\.",
+        )
+        return
+
+    async with session_scope() as session:
+        setting = await user_repo.get_settings_row(session, user_id=user_id)
+        if setting is None:
+            from app.db.models import AppSetting
+
+            setting = AppSetting(user_id=user_id)
+            session.add(setting)
+        setting.archive_bot_chat_id = chat_id
+        setting.archive_chat_id = None
+
+    await state.clear()
+    await _send(message, await _archive_screen(user_id, page=0))
+
+
+def _forwarded_chat_id(message: Message) -> int | None:
+    """The chat a message was forwarded from, when Telegram says so.
+
+    Only a forward from a *chat* counts: a forward from a person carries their
+    id, and pointing an archive at a private conversation is not what anyone
+    means by "the group I added the bot to".
+    """
+    origin = getattr(message, "forward_origin", None)
+    chat = getattr(origin, "chat", None)
+    return int(chat.id) if chat is not None else None
 
 
 @router.callback_query(F.data == "nav:about")

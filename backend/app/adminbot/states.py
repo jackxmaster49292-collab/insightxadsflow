@@ -59,6 +59,12 @@ class IconSetup(StatesGroup):
     collect = State()
 
 
+class SetArchive(StatesGroup):
+    #: Waiting for the id of a chat the bot was added to, or a message
+    #: forwarded from it.
+    chat = State()
+
+
 class EditButton(StatesGroup):
     #: Waiting for the new label. The chosen default's index into
     #: ``views.RENAMEABLE_BUTTONS`` sits in state data under "button_index".

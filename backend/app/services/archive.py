@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.base import ChatRef, TelegramAdapter, TextEntity
+from app.adapters.base import ChatRef, PeerKind, TelegramAdapter, TextEntity
+from app.config import get_settings
 from app.db.models import (
     AppSetting,
     Broadcast,
@@ -64,17 +66,76 @@ _sleep = asyncio.sleep
 #: is recognising the group *later*, so a years-old bio serves that less.
 _DETAILS_STALE_DAYS = 30
 
+#: Stable key for the admin bot's mock script, so a test can steer what the
+#: bot-delivered archive does without a connection row to hang it off.
+_ARCHIVE_BOT_ID = uuid.UUID("00000000-0000-0000-0000-0000000a4c41")
+
 #: How much of a bio the index carries. Enough to recognise the group, without
 #: one chatty bio swallowing the chunk budget for everyone else's lines.
 _BIO_CHARS = 160
 
 
+@dataclass(frozen=True, slots=True)
+class Destination:
+    """Where the archive goes, and who carries it there."""
+
+    ref: ChatRef
+    #: True when the admin bot delivers, rather than the posting account.
+    via_bot: bool
+
+
 async def archive_chat(session: AsyncSession, *, user_id: uuid.UUID) -> TelegramChat | None:
-    """The group this customer keeps their copies in, if they chose one."""
+    """The synced group this customer keeps account-delivered copies in."""
     setting = await session.get(AppSetting, user_id)
     if setting is None or setting.archive_chat_id is None:
         return None
     return await session.get(TelegramChat, setting.archive_chat_id)
+
+
+async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Destination | None:
+    """Resolve the archive destination, preferring the bot when one is set.
+
+    The bot wins because of *why* the archive exists: an archive the account
+    delivers stops the day that account is lost, which is the event being
+    insured against. The account route stays for anyone who would rather the
+    copies come from the same account that posted them.
+    """
+    setting = await session.get(AppSetting, user_id)
+    if setting is None:
+        return None
+
+    if setting.archive_bot_chat_id is not None:
+        peer_id = setting.archive_bot_chat_id
+        kind = PeerKind.channel if str(peer_id).startswith("-100") else PeerKind.chat
+        return Destination(ChatRef(kind, peer_id), via_bot=True)
+
+    chat = await archive_chat(session, user_id=user_id)
+    return Destination(chat_repo.to_ref(chat), via_bot=False) if chat else None
+
+
+def bot_adapter() -> TelegramAdapter | None:
+    """An adapter for the admin bot, or None when this deployment has no token.
+
+    Built through the same factory the rest of the system uses, so a mock
+    deployment stays a mock deployment and no test can reach Telegram.
+    """
+    settings = get_settings()
+    # Mode before token, exactly as ``build_adapter`` orders it: a mock
+    # deployment needs no credential to pretend, and checking the token first
+    # would make every test silently take the "no archive" path.
+    if not settings.live_telegram:
+        from app.adapters.factory import mock_script_for
+        from app.adapters.mock import MockAdapter
+
+        return MockAdapter(mock_script_for(_ARCHIVE_BOT_ID), kind="bot")
+
+    token = settings.admin_bot_token
+    if not token:
+        return None
+
+    from app.adapters.bot import BotAdapter
+
+    return BotAdapter(token)
 
 
 async def _delivered(
@@ -223,17 +284,28 @@ async def store_round(
     missing copy is a smaller loss than a broadcast marked failed because its
     bookkeeping did not go through.
     """
-    destination = await archive_chat(session, user_id=broadcast.user_id)
+    destination = await destination_for(session, user_id=broadcast.user_id)
     if destination is None:
         return 0
 
     rows = await _delivered(session, broadcast_id=broadcast.id)
     if not rows:
         return 0
+
+    # Details are always learned through the *account*: only it is a member of
+    # the groups being described, and the bot is not.
     await _fill_details(session, rows, adapter)
     lines = _index_lines(rows)
 
-    ref: ChatRef = chat_repo.to_ref(destination)
+    courier = adapter
+    if destination.via_bot:
+        from_bot = bot_adapter()
+        if from_bot is None:
+            log.warning("archive_no_bot_token", broadcast_id=str(broadcast.id))
+            return 0
+        courier = from_bot
+
+    ref = destination.ref
     round_label = f" — round {broadcast.repeat_count}" if broadcast.repeat_every_s else ""
     sent = 0
 
@@ -243,7 +315,7 @@ async def store_round(
         entities = [TextEntity.from_json(e) for e in broadcast.body_entities]
         has_media = broadcast.media_kind is not BroadcastMedia.none and broadcast.media_bytes
         if has_media:
-            await adapter.send_photo(
+            await courier.send_photo(
                 ref,
                 bytes(broadcast.media_bytes or b""),
                 caption=broadcast.body_text,
@@ -251,7 +323,7 @@ async def store_round(
                 filename=broadcast.media_filename or "image.jpg",
             )
         elif broadcast.body_text.strip():
-            await adapter.send_text(ref, broadcast.body_text, entities=entities)
+            await courier.send_text(ref, broadcast.body_text, entities=entities)
         sent += 1
     except Exception as exc:
         log.warning("archive_copy_failed", broadcast_id=str(broadcast.id), error=str(exc))
@@ -259,7 +331,7 @@ async def store_round(
     header = f"📁 {broadcast.name}{round_label} — {len(lines)} groups"
     for chunk in _chunks(lines, header=header):
         try:
-            await adapter.send_text(ref, chunk)
+            await courier.send_text(ref, chunk)
             sent += 1
         except Exception as exc:
             log.warning("archive_index_failed", broadcast_id=str(broadcast.id), error=str(exc))

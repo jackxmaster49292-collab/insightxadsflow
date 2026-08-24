@@ -573,3 +573,199 @@ async def test_a_long_bio_is_clipped_not_dominant(client, actor, session):
     bio_line = next(line for line in index.splitlines() if "word" in line)
     assert len(bio_line) < _BIO_CHARS + 40
     assert "…" in bio_line
+
+
+# --------------------------------------------------------------------------- #
+# Delivered by the bot, so it survives the account
+# --------------------------------------------------------------------------- #
+BOT_GROUP_ID = -1003988585561
+
+
+async def _bot_archive(session, actor, chat_id: int = BOT_GROUP_ID):
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    if setting is None:
+        setting = AppSetting(user_id=uuid.UUID(actor.id))
+        session.add(setting)
+    setting.archive_bot_chat_id = chat_id
+    setting.archive_chat_id = None
+    await session.commit()
+
+
+def _bot_script():
+    from app.services.archive import _ARCHIVE_BOT_ID
+
+    return script_for(_ARCHIVE_BOT_ID)
+
+
+async def test_the_bot_delivers_the_archive_when_it_is_set(client, actor, session):
+    """The whole reason for this route: an archive the *account* delivers stops
+    the day that account is lost, which is the event being insured against."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0, text="SALE 🔥")
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.body_entities = AD_ENTITIES
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    account_sends = script_for(ctx["connection_id"]).calls_to("send_text")
+    assert len(account_sends) == 2, "the account posted the ads and nothing else"
+
+    bot_sends = _bot_script().calls_to("send_text")
+    assert [c.args[0].peer_id for c in bot_sends] == [BOT_GROUP_ID, BOT_GROUP_ID]
+    copy, index = bot_sends
+    assert copy.args[1] == "SALE 🔥"
+    assert [e.type for e in copy.kwargs["entities"]] == ["bold", "custom_emoji"]
+    assert "Group 01" in index.args[1]
+
+
+async def test_the_bot_route_wins_over_a_synced_group(client, actor, session):
+    """Two destinations would double every copy, so one is chosen — the bot,
+    because it is the one that outlives the account."""
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    keep = await _with_archive(session, actor, ctx)
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    setting.archive_bot_chat_id = BOT_GROUP_ID
+    await session.commit()
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    to_account_group = [
+        c
+        for c in script_for(ctx["connection_id"]).calls_to("send_text")
+        if c.args[0].peer_id == keep.peer_id
+    ]
+    assert len(to_account_group) == 1, "only the ad itself, no second copy"
+    assert _bot_script().calls_to("send_text"), "the bot carried the archive"
+
+
+async def test_setting_one_route_clears_the_other(client, actor, state, session):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback
+
+    ctx = await build_broadcast(actor, session, groups=1)
+    await _bot_archive(session, actor)
+
+    await handlers.set_archive(
+        a_callback(f"arch:s:{ctx['chat_ids'][0]}"), user_id=uuid.UUID(actor.id)
+    )
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    await session.refresh(setting)
+    assert setting.archive_chat_id == ctx["chat_ids"][0]
+    assert setting.archive_bot_chat_id is None, "one destination at a time"
+
+
+async def test_turning_it_off_clears_both_routes(client, actor, state, session):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback
+
+    await _bot_archive(session, actor)
+    await handlers.set_archive(a_callback("arch:off"), user_id=uuid.UUID(actor.id))
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    await session.refresh(setting)
+    assert setting.archive_bot_chat_id is None
+    assert setting.archive_chat_id is None
+
+
+async def test_the_id_is_proved_before_it_is_saved(client, actor, state, session):
+    """A missing invite or a missing permission is discovered here, not by
+    silently swallowing every archive from then on."""
+    # send_text fails per destination, not per method name.
+    from app.adapters.base import ChatRef, PeerKind
+    from app.adminbot import handlers
+    from app.adminbot.states import SetArchive
+    from tests.integration.test_bot_flows import Sent, a_message
+
+    _bot_script().fail_delivery(
+        ChatRef(PeerKind.channel, BOT_GROUP_ID), RuntimeError("CHAT_WRITE_FORBIDDEN")
+    )
+    await state.set_state(SetArchive.chat)
+    await handlers.archive_chat_given(
+        a_message(str(BOT_GROUP_ID)), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    assert setting is None or setting.archive_bot_chat_id is None
+    assert "could not post there" in Sent.last()
+
+
+async def test_a_proved_id_is_saved_and_announced(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.adminbot.states import SetArchive
+    from tests.integration.test_bot_flows import a_message
+
+    await state.set_state(SetArchive.chat)
+    await handlers.archive_chat_given(
+        a_message(str(BOT_GROUP_ID)), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    await session.refresh(setting)
+    assert setting.archive_bot_chat_id == BOT_GROUP_ID
+
+    hello = _bot_script().calls_to("send_text")[0]
+    assert hello.args[0].peer_id == BOT_GROUP_ID
+    assert "Archive set up" in hello.args[1]
+
+
+async def test_nonsense_instead_of_an_id_is_explained(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.adminbot.states import SetArchive
+    from tests.integration.test_bot_flows import Sent, a_message
+
+    await state.set_state(SetArchive.chat)
+    await handlers.archive_chat_given(
+        a_message("my group"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert "not a chat id" in Sent.last()
+    assert _bot_script().calls_to("send_text") == [], "nothing sent on a typo"
+
+
+async def test_a_forwarded_message_supplies_the_id(client, actor, state, session):
+    """Nobody should have to know where Telegram hides a chat id."""
+    from aiogram.types import Chat, MessageOriginChat
+
+    from app.adminbot import handlers
+    from app.adminbot.states import SetArchive
+    from tests.integration.test_bot_flows import a_message
+
+    forwarded = a_message("anything").model_copy(
+        update={
+            "forward_origin": MessageOriginChat(
+                type="chat",
+                date=__import__("datetime").datetime.now(__import__("datetime").UTC),
+                sender_chat=Chat(id=BOT_GROUP_ID, type="supergroup"),
+                chat=Chat(id=BOT_GROUP_ID, type="supergroup"),
+            )
+        }
+    )
+
+    await state.set_state(SetArchive.chat)
+    await handlers.archive_chat_given(forwarded, user_id=uuid.UUID(actor.id), state=state)
+
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    await session.refresh(setting)
+    assert setting.archive_bot_chat_id == BOT_GROUP_ID
+
+
+def test_the_screen_offers_both_routes_and_explains_the_difference():
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    screen = views.archive_settings(current=None, chats=[], page=0)
+    callbacks = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+    assert "arch:bot" in callbacks
+    assert "if the posting account is ever gone" in screen.text
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)

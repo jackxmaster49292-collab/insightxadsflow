@@ -1276,7 +1276,18 @@ def archive_settings(
     if current is not None:
         lines.append(f"*Now* — {escape(str(current))}")
     else:
-        lines.append("*Now* — off\\. Tap a group to start keeping copies\\.")
+        lines.append("*Now* — off\\.")
+    lines += [
+        "",
+        "*Two ways to set it:*",
+        "",
+        "• *Add the bot to a group as admin*, then tap the button below and "
+        "send its chat id\\. The copies then come from the *bot* — which is "
+        "the one that keeps working if the posting account is ever gone\\.",
+        "",
+        "• Or tap one of your own groups below\\. Copies come from the same "
+        "account that posts the ads, which must be a member of it\\.",
+    ]
 
     if not chats:
         lines += [
@@ -1298,6 +1309,7 @@ def archive_settings(
     return Screen(
         "\n".join(lines),
         _rows(
+            [InlineKeyboardButton(text="🤖 Use a group the bot is in", callback_data="arch:bot")],
             *rows,
             _pager("nav:arch:", page, pages),
             [InlineKeyboardButton(text="🚫 Turn off", callback_data="arch:off")]

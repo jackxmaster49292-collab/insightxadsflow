@@ -843,6 +843,40 @@ test regression here was instructive: an error string spelled ``FLOOD_WAIT_42``
 began *actually waiting 42 seconds* once the walk learned to obey waits — the
 suite caught the new behaviour working.
 
+### ADR-061 — The archive may be delivered by the bot, and that route wins
+**Context.** The operator expected to add the *bot* to a group as admin and
+have the copies land there. ADR-057 had the *account* deliver them, so the bot
+being admin changed nothing. Their expectation turns out to be the better
+design for the stated purpose: an archive the account delivers stops the day
+that account is lost — the exact event the archive insures against.
+**Decision.** ``AppSetting.archive_bot_chat_id`` holds a raw Telegram id,
+deliberately not a foreign key to ``telegram_chats``: that table is what a
+connected *account* can see, and this chat is one the **bot** was added to.
+When set it wins over the account route, because two destinations would double
+every copy. Delivery goes through ``BotAdapter`` — the existing boundary — so
+no new Telegram code enters the codebase and a mock deployment stays mocked.
+Group details are still learned through the account, which alone is a member
+of the groups being described.
+**Consequence.** The id is **proved before it is saved**: the bot posts one
+line into the chat, so a missing invite or a missing post permission surfaces
+during setup rather than silently swallowing every archive afterwards. The id
+can be typed or supplied by forwarding any message from the group, and only a
+forward from a *chat* counts — a forward from a person carries their id, and
+an archive pointed at a private conversation is not what "the group I added
+the bot to" means.
+
+### ADR-062 — Mode before credential when building an adapter
+**Context.** ``archive.bot_adapter()`` checked for a bot token before checking
+``live_telegram``, so on any deployment without a token — every test — it
+returned ``None`` and the archive silently took the "not configured" path.
+**Decision.** Check the mode first and return the mock adapter, exactly as
+``build_adapter`` already orders it; require the token only on the live path.
+**Consequence.** A mock deployment needs no credential to pretend, and five
+tests that looked like feature failures were this ordering. Worth repeating as
+a rule: when a factory has both a mode switch and a credential check, the mode
+comes first, or the credential silently decides behaviour it was never meant
+to decide.
+
 ---
 
 ## Open tradeoffs
