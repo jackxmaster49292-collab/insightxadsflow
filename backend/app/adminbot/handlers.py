@@ -314,7 +314,7 @@ async def nav_roles(query: CallbackQuery, **_extra: Any) -> None:
 async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
     async with session_scope() as session:
         chats = await _postable_chats(session, user_id, groups_only=True)
-        setting = await user_repo.get_settings_row(session, user_id=user_id)
+        setting = await archive_service.any_operator_setting(session)
         title = None
         if setting is not None and setting.archive_bot_chat_id is not None:
             # No title to show: this chat is one the bot was added to, not one
@@ -323,7 +323,12 @@ async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
         else:
             chat = await archive_service.archive_chat(session, user_id=user_id)
             title = chat.title if chat else None
-    return views.archive_settings(current=title, chats=chats, page=page)
+    return views.archive_settings(
+        current=title,
+        chats=chats,
+        page=page,
+        all_users=setting.archive_all_users if setting else True,
+    )
 
 
 @router.callback_query(F.data.startswith("nav:arch"))
@@ -340,7 +345,9 @@ async def nav_archive(
 # ``arch:bot``, whose own handler is registered later and so never ran — the
 # button reported "that group is not in your list" because this handler read
 # "bot" as a chat id.
-@router.callback_query(F.data.startswith("arch:s:") | (F.data == "arch:off"))
+@router.callback_query(
+    F.data.startswith("arch:s:") | (F.data == "arch:off") | (F.data == "arch:scope")
+)
 async def set_archive(
     query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
 ) -> None:
@@ -357,7 +364,14 @@ async def set_archive(
             setting = AppSetting(user_id=user_id)
             session.add(setting)
 
-        if verb == "off":
+        if verb == "scope":
+            setting.archive_all_users = not setting.archive_all_users
+            notice = (
+                "Copying everyone's ads."
+                if setting.archive_all_users
+                else "Copying only accounts you switch on."
+            )
+        elif verb == "off":
             setting.archive_chat_id = None
             setting.archive_bot_chat_id = None
             notice = "Archive off."
@@ -2536,49 +2550,29 @@ async def user_actions(
             await query.answer("That account no longer exists.", show_alert=True)
             return
 
-        if action == "op":
-            if get_settings().is_admin(target.telegram_user_id or 0):
-                await query.answer("Already an operator, from the settings file.")
-                return
-            await _render(query, views.confirm_operator(user=target))
-            await query.answer()
-            return
-
-        if action == "opyes":
-            # Guarded again here, not only behind the confirmation screen: a
-            # callback can be replayed directly, and this one grants power.
-            target.is_operator = True
+        if action in ("arcon", "arcoff"):
+            # A decision about this one account, which outranks the default in
+            # both directions — see ``archive_service._is_archived``.
+            target.archive_ads = action == "arcon"
             await event_repo.audit(
                 session,
                 user_id=user_id,
-                action="user.make_operator",
+                action="user.archive_ads",
                 object_type="user",
                 object_id=str(target.id),
-                payload={"telegram_user_id": target.telegram_user_id},
+                payload={"archive_ads": target.archive_ads},
             )
-            notice = "Now an operator."
+            notice = (
+                "Their ads will be copied to your archive."
+                if target.archive_ads
+                else "Their ads will not be copied."
+            )
 
-        elif action == "unop":
-            if target.id == user_id:
-                # Demoting yourself from the only account you can reach the
-                # panel with is a locked door with the key inside.
-                await query.answer("You cannot remove your own operator access.", show_alert=True)
-                return
-            if get_settings().is_admin(target.telegram_user_id or 0):
-                await query.answer(
-                    "That id is in the settings file, so it stays an operator.", show_alert=True
-                )
-                return
-            target.is_operator = False
-            await event_repo.audit(
-                session,
-                user_id=user_id,
-                action="user.remove_operator",
-                object_type="user",
-                object_id=str(target.id),
-                payload={"telegram_user_id": target.telegram_user_id},
-            )
-            notice = "No longer an operator."
+        elif action == "arcauto":
+            # Back to following the deployment default, which is different from
+            # being switched off: flipping the default moves this account again.
+            target.archive_ads = None
+            notice = "Following the default."
 
         elif action == "asksus":
             if target.id == user_id:
@@ -2605,10 +2599,11 @@ async def user_actions(
             notice = "Reinstated. Their rules and ads stay paused until they restart them."
 
         activity = await user_repo.activity_for(session, user_id=target.id)
+        setting = await archive_service.any_operator_setting(session)
         screen = views.user_detail(
             user=target,
             activity=activity,
-            from_env=get_settings().is_admin(target.telegram_user_id or 0),
+            archive_default_on=bool(setting and setting.archive_all_users),
         )
 
     await _render(query, screen)

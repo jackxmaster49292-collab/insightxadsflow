@@ -966,25 +966,41 @@ guard restored. The general lesson is the older one from ADR-062: a condition
 that decides whether work happens must not also be the reason no one hears
 about it.
 
-### ADR-068 — Operator is granted in the panel, never acquired
-**Context.** The owner reaches this bot from more than one Telegram account,
-and every new one meant editing ``ADMIN_TELEGRAM_IDS`` and redeploying. They
-asked for it to happen automatically. Automatic in the literal sense is not
-available: ``ACCESS_MODE=open`` gives an account to anyone who messages the
-bot, so promoting whoever appears would hand strangers the ability to suspend
-accounts and reach every operator screen.
-**Decision.** ``users.is_operator``, granted by an existing operator from the
-Users screen in two taps and effective immediately — no file, no redeploy.
-``ADMIN_TELEGRAM_IDS`` remains the **root of trust**: an id there is an
-operator regardless of the database and cannot be demoted from the panel, so
-no mis-tap can lock a deployment out of itself. Nobody may remove their own
-access, for the same reason.
-**Consequence.** The grant is asked once, on a screen that names what it hands
-over — see every account and suspend any of them, set the archive, change the
-panel's chrome — and what it does not: no operator can read anyone's messages
-or ads. Resolution lives in ``user_service.is_operator`` and every gate calls
-it, including the archive's; a grant that worked everywhere except the feature
-it was granted for would be worse than no grant at all.
+### ADR-068 — Archiving is a property of an account, not of operator status
+**Context.** ADR-068 originally granted operator access from the panel, so the
+owner's second Telegram account could be promoted without editing a file. The
+owner rejected it, and they were right: what they actually wanted was for other
+accounts' **ads** to reach their archive, not for those accounts to gain the
+power to suspend people and change the panel. Granting admin rights to solve an
+archiving problem is a much larger key than the lock needed.
+**Decision.** Operator access is once again the settings file alone —
+``ADMIN_TELEGRAM_IDS``, decided outside the product, never handed out by it.
+What replaces the grant is ``User.archive_ads``: three-valued, where ``None``
+follows the deployment default (``AppSetting.archive_all_users``, on) and
+``True``/``False`` is a decision about that one account which outranks the
+default in **both** directions. That is what makes "everyone except this one"
+and "nobody except this one" expressible with one switch and one flag.
+**Consequence.** The Users screen offers *Copy their ads* / *Stop copying their
+ads*, and *Follow the default* once a per-account choice exists — "never chosen"
+and "chosen to be off" behave alike today but only one should move when the
+default is flipped. The archive gate no longer asks whether the ad's owner is
+an operator; it asks whether that account is archived, which is a different and
+much narrower question.
+
+### ADR-070 — Users are told the operator keeps a copy of their ads
+**Context.** With the default on, every account's ads are copied into the
+operator's group. ADR-032 says an operator sees counts and never content, and
+the terms screen told users only that their access could be suspended. Shipping
+the copy while the terms implied otherwise would make the product lie to the
+people it is asking to accept them.
+**Decision.** The terms gained a line: the operator keeps a copy of the ads
+sent through this bot and the list of groups each went to, and private messages
+are never read. It sits above the accept button, where it is read before
+anything can be sent.
+**Consequence.** ADR-032 still holds for what it covered — the Users screen
+shows counts, no operator can browse anyone's messages, and auto-reply content
+stays private. What changed is ads posted *through* this deployment, and now
+the disclosure matches the code.
 
 ### ADR-069 — One archive per deployment, not per operator
 **Context.** With the archive keyed to a user, promoting a second account left

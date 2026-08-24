@@ -36,7 +36,6 @@ from app.db.session import session_scope
 from app.repositories import admins as admin_repo
 from app.repositories import events as event_repo
 from app.security.ratelimit import check_rate_limit
-from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
 
@@ -75,11 +74,11 @@ class AccessMiddleware(BaseMiddleware):
             return None
 
         settings = get_settings()
-        # Env first, then the database — see ``user_service.is_operator``. The
-        # env list is the root of trust; the database is how a second account
-        # is granted in one tap instead of an edit-and-redeploy.
-        async with session_scope() as session:
-            is_operator = await user_service.is_operator(session, telegram_user_id=sender.id)
+        # The settings file, and nothing else. Operator access is not something
+        # the panel can hand out: on an open deployment anyone gets an account
+        # by messaging the bot, so the list of people who can act on every
+        # account stays a deployment decision, made outside the product.
+        is_operator = settings.is_admin(sender.id)
 
         # --- 1. allowed in at all? -----------------------------------------
         if not settings.open_access and not is_operator:

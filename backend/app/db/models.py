@@ -187,15 +187,14 @@ class User(Base, TimestampMixin):
     broadcasts_sent: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
-    #: Promoted to operator from inside the panel, by an operator.
+    #: Whether this account's ads are copied to the deployment's archive.
     #:
-    #: ``ADMIN_TELEGRAM_IDS`` stays the root of trust — an id in it is always an
-    #: operator and cannot be demoted here, so a deployment can never lock
-    #: itself out by a mis-tap. This column is the *addition*: a second account
-    #: of the owner's, granted in one tap instead of an edit-and-redeploy.
-    is_operator: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false", nullable=False
-    )
+    #: ``None`` follows ``AppSetting.archive_all_users``; ``True``/``False`` is
+    #: a decision made about this one account and outranks the default. Kept
+    #: three-valued on purpose: "never chosen" and "chosen to be off" behave the
+    #: same today but mean different things, and only one of them should change
+    #: when the default is flipped.
+    archive_ads: Mapped[bool | None] = mapped_column(Boolean)
     #: When this person asked to be told the publisher side had opened. Kept as
     #: a timestamp rather than a flag so the operator can see *demand over
     #: time*, which is the only thing that would justify building it.
@@ -253,6 +252,14 @@ class AppSetting(Base):
     #: by the account stops the day that account does, which is the very event
     #: the archive is kept for.
     archive_bot_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    #: Copy *every* account's ads here, not only the operator's own.
+    #:
+    #: On by default, which is the point of the setting: an archive that had to
+    #: be switched on per account would miss exactly the accounts nobody
+    #: remembered to switch on. Individual accounts can still be excluded.
+    archive_all_users: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

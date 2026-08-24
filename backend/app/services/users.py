@@ -17,7 +17,6 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.db.models import (
     Broadcast,
     BroadcastStatus,
@@ -164,27 +163,3 @@ async def is_active(session: AsyncSession, user_id: uuid.UUID) -> bool:
     """
     user = await session.get(User, user_id)
     return bool(user and user.is_active)
-
-
-async def is_operator(session: AsyncSession, *, telegram_user_id: int | None) -> bool:
-    """Is this Telegram account an operator of this deployment?
-
-    Two sources, and the order is the point. ``ADMIN_TELEGRAM_IDS`` is the root
-    of trust: an id there is an operator whether or not a database row exists,
-    so a lost or corrupted row cannot lock the owner out of their own
-    deployment. The database is the *addition* — a second account promoted from
-    inside the panel, which is what stops the owner editing a file and
-    redeploying every time they message the bot from a different phone.
-
-    Never inferred from anything else. On an open deployment anyone can get an
-    account by messaging the bot, so operator status has to be granted, not
-    acquired.
-    """
-    if telegram_user_id is None:
-        return False
-    if get_settings().is_admin(telegram_user_id):
-        return True
-    result = await session.execute(
-        select(User.is_operator).where(User.telegram_user_id == telegram_user_id)
-    )
-    return bool(result.scalar_one_or_none())

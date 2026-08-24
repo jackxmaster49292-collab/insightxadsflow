@@ -511,17 +511,26 @@ worker writes a row to `admin_notifications` and the bot drains that outbox and
 sends it. Alerts therefore survive a bot restart, and a `dedupe_key` collapses a
 failing rule's repeats into one message rather than a storm (ADR-022).
 
-## Adding another of your own accounts (operators)
+## Whose ads are archived (operators)
 
-Message the bot once from the other account, then from an operator account open
-**👥 Users**, tap it, and tap **🔑 Make operator**. It takes effect
-immediately — no settings file, no redeploy.
+By default **everyone's** — every account that uses this bot, including any
+added later, has its ads copied into your archive group along with the list of
+groups each one reached. That is the switch on the **🗄 Archive** screen:
 
-Only an existing operator can grant this, and the confirmation says exactly
-what it hands over. It is not automatic on purpose: on an open deployment
-anyone gets an account just by messaging the bot, so operator access is granted
-rather than acquired.
+* **👥 Everyone** — the default. New accounts are included automatically.
+* **👤 Only chosen accounts** — nothing is copied unless you switch it on per
+  account.
 
-The ids in `ADMIN_TELEGRAM_IDS` are always operators and cannot be removed from
-the panel — that is what stops a deployment locking itself out. Nobody can
-remove their own access either.
+To change one account either way, open **👥 Users**, tap it, and use **📁 Copy
+their ads** / **🚫 Stop copying their ads**. A choice made about an account
+beats the default in both directions, so "everyone except this one" and "nobody
+except this one" are both one tap. **↩️ Follow the default** puts it back to
+whatever the switch says.
+
+Users are told this: the terms screen, which everyone accepts before they can
+send anything, states that the operator keeps a copy of the ads sent through
+the bot. Their private messages are not read — only ads posted with it.
+
+Operator access itself is *not* granted from the panel. It stays in
+`ADMIN_TELEGRAM_IDS` on the server, because on an open deployment anyone gets
+an account just by messaging the bot.

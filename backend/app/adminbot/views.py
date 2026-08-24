@@ -149,6 +149,11 @@ def terms() -> Screen:
                 "• You are responsible for what you send\\. The operator of this "
                 "bot can suspend your access\\.",
                 "",
+                "• *The operator keeps a copy of the ads you send through this "
+                "bot*, along with the list of groups each one went to\\. Your "
+                "private messages are never read — only the ads you post with "
+                "it\\.",
+                "",
                 "• Your bot token, phone number and login code are typed into "
                 "this chat\\. Each message is deleted the moment it is read, but "
                 "Telegram's servers held it for a moment\\.",
@@ -561,7 +566,7 @@ def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:
 
 
 def user_detail(  # type: ignore[no-untyped-def]
-    *, user, activity: dict[str, int], from_env: bool = False
+    *, user, activity: dict[str, int], archive_default_on: bool = True
 ) -> Screen:
     """One account, as counts.
 
@@ -580,10 +585,9 @@ def user_detail(  # type: ignore[no-untyped-def]
         lines.append(f"*Reason* — {escape(user.suspended_reason)}")
     if user.terms_accepted_at is None:
         lines.append("*Terms* — not accepted yet")
-    if from_env:
-        lines.append("*Operator* — yes, from this deployment's settings file")
-    elif user.is_operator:
-        lines.append("*Operator* — yes")
+    archived = user.archive_ads if user.archive_ads is not None else archive_default_on
+    following = "" if user.archive_ads is not None else " \\(the default\\)"
+    lines.append(f"*Ads copied to your archive* — {'yes' if archived else 'no'}{following}")
 
     lines += [
         "",
@@ -600,46 +604,23 @@ def user_detail(  # type: ignore[no-untyped-def]
         else InlineKeyboardButton(text="🚫 Suspend", callback_data=f"usr:{user.id}:asksus")
     )
 
-    # An id from the settings file cannot be demoted here — it is the root of
-    # trust, and a deployment that can tap itself out of its own operator list
-    # is one mis-tap from being locked out.
-    operator_button: list[InlineKeyboardButton] = []
-    if not from_env:
-        operator_button = [
-            InlineKeyboardButton(
-                text="🔑 Remove operator" if user.is_operator else "🔑 Make operator",
-                callback_data=f"usr:{user.id}:{'unop' if user.is_operator else 'op'}",
-            )
-        ]
+    archive_row = [
+        InlineKeyboardButton(
+            text="🚫 Stop copying their ads" if archived else "📁 Copy their ads",
+            callback_data=f"usr:{user.id}:{'arcoff' if archived else 'arcon'}",
+        )
+    ]
+    # Only offered once a decision has been made about this account, because
+    # "follow the default" is where it already is otherwise.
+    default_row = (
+        [InlineKeyboardButton(text="↩️ Follow the default", callback_data=f"usr:{user.id}:arcauto")]
+        if user.archive_ads is not None
+        else []
+    )
 
     return Screen(
         "\n".join(lines),
-        _rows([action], operator_button, _back("nav:users:0")),
-    )
-
-
-def confirm_operator(*, user) -> Screen:  # type: ignore[no-untyped-def]
-    """Granting operator is not an undoable tap, so it is asked once.
-
-    The list of what it hands over is the whole point of asking: on an open
-    deployment anyone can get an account by messaging the bot, so this is the
-    line between a user and someone who can act on every user.
-    """
-    return Screen(
-        f"🔑 *Make {escape(_user_label(user))} an operator?*\n\n"
-        "They will be able to:\n"
-        "• see every account and suspend any of them\n"
-        "• set where the archive of posted ads goes\n"
-        "• change the panel's icons and button labels\n\n"
-        "They will *not* be able to see anyone's messages or ads — no operator "
-        "can\\.\n\n"
-        "Grant this only to an account you own\\. On this deployment anyone can "
-        "get an account by messaging the bot, so this is the line between a "
-        "user and someone who can act on every user\\.",
-        _rows(
-            [InlineKeyboardButton(text="Yes, make operator", callback_data=f"usr:{user.id}:opyes")],
-            [InlineKeyboardButton(text="Cancel", callback_data=f"usr:{user.id}")],
-        ),
+        _rows([action], archive_row, default_row, _back("nav:users:0")),
     )
 
 
@@ -1303,6 +1284,7 @@ def archive_settings(
     current: object | None,
     chats: Sequence,  # type: ignore[type-arg]
     page: int,
+    all_users: bool = True,
 ) -> Screen:
     """Choose one group to keep copies of every ad in.
 
@@ -1325,6 +1307,10 @@ def archive_settings(
         lines.append(f"*Now* — {escape(str(current))}")
     else:
         lines.append("*Now* — off\\.")
+    lines.append(
+        "*Whose ads* — "
+        + ("everyone who uses this bot" if all_users else "only accounts you switch on")
+    )
     lines += [
         "",
         "*Two ways to set it:*",
@@ -1360,6 +1346,12 @@ def archive_settings(
             [InlineKeyboardButton(text="🤖 Use a group the bot is in", callback_data="arch:bot")],
             *rows,
             _pager("nav:arch:", page, pages),
+            [
+                InlineKeyboardButton(
+                    text="👤 Only chosen accounts" if all_users else "👥 Everyone",
+                    callback_data="arch:scope",
+                )
+            ],
             [InlineKeyboardButton(text="🚫 Turn off", callback_data="arch:off")]
             if current is not None
             else [],

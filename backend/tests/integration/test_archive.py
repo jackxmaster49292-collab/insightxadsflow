@@ -861,28 +861,101 @@ async def test_a_non_operator_left_mid_flow_is_shown_the_door(client, actor, sta
     assert await state.get_state() is None, "and not left stuck in the flow"
 
 
-async def test_a_row_belonging_to_a_non_operator_archives_nothing(
-    client, actor, session, monkeypatch
+async def test_a_normal_user_s_ads_are_archived_by_default(
+    client, actor, other_actor, session, monkeypatch
 ):
-    """The layer that holds however a row got written: a leftover from before
-    the feature was restricted, a direct database edit, a future API."""
+    """The point of the default: an archive that had to be switched on per
+    account would miss exactly the accounts nobody remembered to switch on."""
     from app.config import get_settings
-    from app.services import archive as archive_service
+    from tests.integration.test_bot_flows import ADMIN_CHAT
 
-    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
-    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
     await _bot_archive(session, actor)
+    monkeypatch.setattr(get_settings(), "admin_telegram_ids", str(ADMIN_CHAT), raising=False)
 
-    # Same row, same setting — the account simply is not an operator any more.
-    monkeypatch.setattr(get_settings(), "admin_telegram_ids", "", raising=False)
-    assert await archive_service.destination_for(session, user_id=uuid.UUID(actor.id)) is None
+    ctx = await build_broadcast(other_actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
 
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    archived = _bot_script().calls_to("send_text")
+    assert archived, "a plain user's ad reaches the operator's archive"
+    assert archived[-1].args[0].peer_id == BOT_GROUP_ID
+
+
+async def test_one_account_can_be_excluded(client, actor, other_actor, session):
+    from app.repositories import users as user_repo
+
+    await _bot_archive(session, actor)
+    them = await user_repo.get_by_id(session, uuid.UUID(other_actor.id))
+    them.archive_ads = False
+    await session.commit()
+
+    ctx = await build_broadcast(other_actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
     await broadcast_service.queue(session, broadcast=broadcast)
     await session.commit()
     await drain(session, broadcast.id)
     await session.commit()
 
-    assert _bot_script().calls_to("send_text") == [], "nothing archived"
+    assert _bot_script().calls_to("send_text") == []
+
+
+async def test_with_the_default_off_only_chosen_accounts_are_archived(
+    client, actor, other_actor, session
+):
+    from app.repositories import users as user_repo
+
+    await _bot_archive(session, actor)
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    setting.archive_all_users = False
+    await session.commit()
+
+    ctx = await build_broadcast(other_actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+    assert _bot_script().calls_to("send_text") == [], "off by default"
+
+    # Switched on for this one account, and the same ad's next round lands.
+    them = await user_repo.get_by_id(session, uuid.UUID(other_actor.id))
+    them.archive_ads = True
+    await session.commit()
+
+    from datetime import UTC, datetime
+
+    from app.repositories import broadcasts as broadcast_repo
+
+    broadcast.status = BroadcastStatus.sending
+    await broadcast_repo.reopen_for_repeat(session, broadcast=broadcast, start_at=datetime.now(UTC))
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+    assert _bot_script().calls_to("send_text"), "chosen accounts still archive"
+
+
+async def test_a_choice_about_an_account_outranks_the_default(client, actor, session):
+    """Both directions, which is what makes "everyone except this one" and
+    "nobody except this one" expressible with one switch and one flag."""
+    from app.services.archive import _is_archived
+
+    class _Owner:
+        def __init__(self, value):
+            self.archive_ads = value
+            self.telegram_user_id = 1
+
+    class _Setting:
+        def __init__(self, default):
+            self.archive_all_users = default
+
+    assert _is_archived(_Owner(None), _Setting(True)) is True
+    assert _is_archived(_Owner(None), _Setting(False)) is False
+    assert _is_archived(_Owner(False), _Setting(True)) is False, "excluded from everyone"
+    assert _is_archived(_Owner(True), _Setting(False)) is True, "included from nobody"
 
 
 def test_the_archive_button_is_operator_only():

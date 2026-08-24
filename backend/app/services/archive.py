@@ -35,7 +35,6 @@ from app.db.models import (
 )
 from app.domain.message_links import LinkKind, link_for
 from app.repositories import chats as chat_repo
-from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
 
@@ -90,7 +89,19 @@ class Destination:
     via_bot: bool
 
 
-async def _any_operator_setting(session: AsyncSession) -> AppSetting | None:
+def _is_archived(owner: User, setting: AppSetting) -> bool:
+    """Are this account's ads copied to the archive?
+
+    A decision made about the account itself wins over the deployment default,
+    in both directions — that is what makes "everyone except this one" and
+    "nobody except this one" both expressible with one switch and one flag.
+    """
+    if owner.archive_ads is not None:
+        return owner.archive_ads
+    return setting.archive_all_users
+
+
+async def any_operator_setting(session: AsyncSession) -> AppSetting | None:
     """The deployment's archive setting, whichever operator saved it.
 
     Ordered by ``updated_at`` so the most recent choice wins: if two operator
@@ -106,7 +117,7 @@ async def _any_operator_setting(session: AsyncSession) -> AppSetting | None:
 
 async def archive_chat(session: AsyncSession, *, user_id: uuid.UUID) -> TelegramChat | None:
     """The synced group the deployment keeps account-delivered copies in."""
-    setting = await _any_operator_setting(session)
+    setting = await any_operator_setting(session)
     if setting is None or setting.archive_chat_id is None:
         return None
     return await session.get(TelegramChat, setting.archive_chat_id)
@@ -120,38 +131,25 @@ async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Desti
     insured against. The account route stays for anyone who would rather the
     copies come from the same account that posted them.
     """
-    # Operator-only, checked here and not just in the panel. The screens hide
-    # the control and the handlers refuse the callback, but this is the layer
-    # that holds however a row got written — a leftover from before the feature
-    # was restricted, a direct database edit, a future API. "Only the admin id,
-    # nowhere else" is a property of the system, not of one screen.
-    owner = await session.get(User, user_id)
-    if owner is None or owner.telegram_user_id is None:
-        log.info("archive_skipped", reason="this account has no Telegram id")
-        return None
-    # Asks the same question the panel asks, so an account granted operator
-    # from inside the bot archives immediately — without this the grant would
-    # work everywhere *except* the feature it was most often granted for.
-    if not await user_service.is_operator(session, telegram_user_id=owner.telegram_user_id):
-        # Said out loud, because this is the likeliest reason an archive that
-        # was configured stops arriving — the operator list changed, or it was
-        # set up before the feature became operator-only. Silence here reads as
-        # "the feature is broken" when it is doing exactly what it was told.
-        log.info(
-            "archive_skipped",
-            reason="not an operator of this deployment",
-            telegram_user_id=owner.telegram_user_id,
-        )
-        return None
-
-    # One archive for the deployment, not one per operator. The owner reaches
-    # this bot from more than one Telegram account, and "my Logs group" is a
-    # property of the deployment rather than of whichever account happened to
-    # send an ad. Per-operator settings meant that promoting a second account
-    # still left it archiving nowhere — a trap with no upside.
-    setting = await _any_operator_setting(session)
+    # One archive for the deployment. It is the operator's group, configured
+    # from the operator's panel, and every account whose ads are archived lands
+    # in the same place.
+    setting = await any_operator_setting(session)
     if setting is None:
         log.info("archive_skipped", reason="no archive chat chosen")
+        return None
+
+    owner = await session.get(User, user_id)
+    if owner is None:
+        return None
+    if not _is_archived(owner, setting):
+        # Named rather than silent: "this account is excluded" and "the archive
+        # is broken" look identical from the outside otherwise.
+        log.info(
+            "archive_skipped",
+            reason="this account's ads are not archived",
+            telegram_user_id=owner.telegram_user_id,
+        )
         return None
 
     if setting.archive_bot_chat_id is not None:
