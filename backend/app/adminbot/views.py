@@ -703,9 +703,21 @@ def page_of_chats(*, chats, page: int, kind: str = "all"):  # type: ignore[no-un
     return list(window)
 
 
-#: How much of a description this screen carries. Shorter than the archive's,
-#: because six of these share one message with their links and titles.
-_CHAT_BIO_CHARS = 120
+#: The most one description may take, in **escaped** characters. Telegram caps
+#: a chat description at 255, and escaping can at worst double a length before
+#: Telegram counts it, so 520 is that maximum — a real description never
+#: reaches it. The point is that nothing an operator reads here is this
+#: screen's own truncation: a members-only chat has no link preview, so its
+#: description is the only thing left to recognise it by, and a description cut
+#: off mid-sentence is exactly the half that does not do that.
+_CHAT_BIO_CHARS = 520
+
+#: What all the descriptions on one page may take between them. Six of them
+#: share a single 4096-character message with their titles, links and counts,
+#: and six escape-heavy ones would overrun it alone. Overrunning is not a long
+#: message — Telegram rejects it with a 400 and the operator gets a blank
+#: screen — so the page spends a budget and marks where it ran out.
+_CHAT_BIO_BUDGET = 2500
 
 #: Which callback verb pages each view of this screen.
 _KIND_VERB = {"all": "groups", "groups": "gall", "channels": "gchan"}
@@ -753,6 +765,7 @@ def user_groups(  # type: ignore[no-untyped-def]
     ]
 
     window, page, pages = _page_of(shown, page, PAGE_SIZE)
+    budget = _CHAT_BIO_BUDGET
     for chat in window:
         mark = "📢" if chat.chat_kind.value == "channel" else "💭"
         can_post = chat.access and chat.access.can_post_destination
@@ -773,14 +786,20 @@ def user_groups(  # type: ignore[no-untyped-def]
 
         # A t.me/c link shows no preview at all, so without this a private
         # group is a title and a number and nothing to recognise it by.
-        facts = []
+        #
+        # These pieces are escaped individually and joined already-escaped:
+        # ``preview`` clips against the escaped length, and re-escaping its
+        # output would double every backslash it just wrote.
+        facts: list[str] = []
         if getattr(chat, "description", None):
             bio = " ".join(chat.description.split())
-            facts.append(bio[:_CHAT_BIO_CHARS] + ("…" if len(bio) > _CHAT_BIO_CHARS else ""))
+            shown_bio, dropped = preview(bio, min(budget, _CHAT_BIO_CHARS))
+            budget -= len(shown_bio)
+            facts.append((shown_bio + "…") if dropped else shown_bio)
         if getattr(chat, "member_count", None):
-            facts.append(f"{chat.member_count:,} members")
+            facts.append(escape(f"{chat.member_count:,} members"))
         if facts:
-            lines.append(f"   _{escape(' · '.join(facts))}_")
+            lines.append(f"   _{' · '.join(facts)}_")
 
     verb = {"channels": "ggrp", "groups": "gall"}.get(kind, "gchan")
     label = {"channels": "💭 Groups only", "groups": "💭 All"}.get(kind, "📢 Channels only")

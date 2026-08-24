@@ -1191,9 +1191,19 @@ is one of the things that would need saying.
 unfurls by itself — Telegram shows the title, the description and a Join button
 under it. A ``t.me/c/`` link shows nothing, so a private group was a title and
 a number with nothing to recognise it by.
-**Decision.** Private chats show their description (clipped to 120) and member
+**Decision.** Private chats show their description **whole** and their member
 count under the link. Public ones show neither, because Telegram is already
 saying it and repeating it would be noise.
+
+The first version clipped at 120 characters, which cut the majority of real
+descriptions mid-sentence — and the cut half is exactly the half that would
+have identified the chat, which is the entire reason the bio is shown. Telegram
+caps a chat description at 255, so the per-chat ceiling is now that maximum
+expressed in escaped characters (520; escaping can double a length before
+Telegram counts it) and no real description meets it. What is bounded instead
+is the *page*: six descriptions share one 4096-character message, so they spend
+a shared budget and mark where it ran out. Overrunning is not a long message —
+Telegram rejects it with a 400 and the operator gets a blank screen.
 **Consequence.** Details are learned for **the page being viewed and no other**
 — six chats, about three seconds, cached from then on. Fetching all 237 would
 take two minutes of Telegram's most rate-limited lookup for chats nobody is

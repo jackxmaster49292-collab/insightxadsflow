@@ -756,29 +756,56 @@ async def test_a_members_only_chat_carries_its_bio_and_size(client, actor, sessi
     assert_valid_markdown_v2(screen.text)
 
 
-def test_a_long_bio_is_clipped_on_this_screen():
-    """Six of these share one message with their links and titles."""
+def _bio_chat(description, title="Chatty", peer=-1002001):
     from types import SimpleNamespace
 
-    from app.adminbot.views import _CHAT_BIO_CHARS
-    from tests.integration.test_bot_flows import assert_valid_markdown_v2
-
-    chat = SimpleNamespace(
+    return SimpleNamespace(
         id=uuid.uuid4(),
-        title="Chatty",
+        title=title,
         chat_kind=SimpleNamespace(value="supergroup"),
-        peer_id=-1002001,
+        peer_id=peer,
         username=None,
-        description="word " * 200,
+        description=description,
         member_count=5,
         access=SimpleNamespace(can_post_destination=True),
     )
-    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
-    screen = views.user_groups(user=user, chats=[chat], page=0)
 
-    bio_line = next(line for line in screen.text.splitlines() if "word" in line)
-    assert len(bio_line) < _CHAT_BIO_CHARS + 40
-    assert "…" in bio_line
+
+def test_a_description_at_telegrams_own_limit_arrives_whole():
+    """255 characters is the most Telegram lets a chat description be, so every
+    real one must survive intact. A members-only chat has no link preview: the
+    description is the only thing left to recognise it by, and half of one is
+    exactly the half that does not."""
+    from types import SimpleNamespace
+
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    bio = ("Deals, escrow and vouches. Owner @someone, backup @another. " * 5)[:255]
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    screen = views.user_groups(user=user, chats=[_bio_chat(bio)], page=0)
+
+    assert views.escape(bio) in screen.text, "the whole description, not a prefix"
+    assert "…" not in screen.text
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_six_long_descriptions_still_fit_in_one_message():
+    """Overrunning 4096 is not a long message — Telegram rejects it with a 400
+    and the operator gets a blank screen. Escaping is what does it: a
+    description of nothing but full stops doubles before Telegram counts it."""
+    from types import SimpleNamespace
+
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    worst = "." * 255  # every character escapes to two
+    chats = [
+        _bio_chat(worst, title=f"Chatty {i}", peer=-1002000 - i) for i in range(views.PAGE_SIZE)
+    ]
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    screen = views.user_groups(user=user, chats=chats, page=0)
+
+    assert len(screen.text) <= 4096, f"{len(screen.text)} characters would be a 400"
+    assert "…" in screen.text, "and it says where it ran out"
     assert_valid_markdown_v2(screen.text)
 
 

@@ -609,6 +609,12 @@ description and member count underneath — which is the only way to recognise a
 private group from a list. Public links are left alone: Telegram unfurls them
 itself, with the title and description already in the preview.
 
+The description arrives **whole**. Telegram caps a chat description at 255
+characters and all of it is shown, so nothing you read there is this screen's
+own truncation. The only thing bounded is the page: six descriptions share one
+message, and if they somehow filled it the last would end in `…` rather than
+the whole message failing to send.
+
 Those details are looked up for the page you are on, once, and remembered. The
 first time a page opens it may take a couple of seconds.
 
