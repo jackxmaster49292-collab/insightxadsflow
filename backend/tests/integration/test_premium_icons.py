@@ -904,7 +904,7 @@ def test_the_library_lists_the_emoji_with_no_id_too():
         for row in screen.keyboard.inline_keyboard:
             for button in row:
                 if (button.callback_data or "").startswith("op:emoji:one:"):
-                    seen.add(button.callback_data.split(":", 3)[3])
+                    seen.add(button.callback_data.split(":", 4)[4])
         assert_valid_markdown_v2(screen.text)
         assert_keyboard_is_sendable(screen.keyboard)
 
@@ -929,13 +929,13 @@ def test_the_screen_behind_a_library_entry_offers_both_ways():
     plain = views.emoji_one(emoticon=one, custom_id=None, page=0)
     data = [b.callback_data for row in plain.keyboard.inline_keyboard for b in row]
     assert "Drawn plain" in plain.text
-    assert f"op:emoji:ask:{one}" in data
-    assert f"op:emoji:del:{one}" not in data, "nothing to clear yet"
+    assert f"op:emoji:ask:all:{one}" in data
+    assert f"op:emoji:del:all:{one}" not in data, "nothing to clear yet"
 
     mapped = views.emoji_one(emoticon=one, custom_id="5368324170671202286", page=0)
     data = [b.callback_data for row in mapped.keyboard.inline_keyboard for b in row]
     assert "`5368324170671202286`" in mapped.text
-    assert f"op:emoji:del:{one}" in data
+    assert f"op:emoji:del:all:{one}" in data
 
     assert_valid_markdown_v2(plain.text)
     assert_valid_markdown_v2(mapped.text)
@@ -1075,7 +1075,7 @@ async def test_an_id_sent_for_one_emoji_maps_only_that_one(client, actor, state,
 
     one = views.panel_emoji()[0]
     await handlers.op_emoji(
-        a_callback(f"op:emoji:ask:{one}"),
+        a_callback(f"op:emoji:ask:all:{one}"),
         user_id=uuid.UUID(actor.id),
         state=state,
         is_operator=True,
@@ -1102,7 +1102,7 @@ async def test_setting_one_emoji_leaves_the_others_alone(client, actor, state, s
     await session.commit()
 
     await handlers.op_emoji(
-        a_callback(f"op:emoji:ask:{first}"),
+        a_callback(f"op:emoji:ask:all:{first}"),
         user_id=uuid.UUID(actor.id),
         state=state,
         is_operator=True,
@@ -1127,7 +1127,7 @@ async def test_one_emoji_can_be_put_back_to_plain(client, actor, state, session)
     await session.commit()
 
     await handlers.op_emoji(
-        a_callback(f"op:emoji:del:{one}"),
+        a_callback(f"op:emoji:del:all:{one}"),
         user_id=uuid.UUID(actor.id),
         state=state,
         is_operator=True,
@@ -1145,7 +1145,7 @@ async def test_an_emoji_the_panel_does_not_draw_is_refused(client, actor, state,
     from tests.integration.test_bot_flows import a_callback
 
     await handlers.op_emoji(
-        a_callback("op:emoji:ask:🦄"),
+        a_callback("op:emoji:ask:all:🦄"),
         user_id=uuid.UUID(actor.id),
         state=state,
         is_operator=True,
@@ -1307,3 +1307,138 @@ def test_the_icon_screen_names_the_automatic_one_it_would_replace():
     assert_valid_markdown_v2(inherited.text)
     assert_valid_markdown_v2(pinned.text)
     assert_keyboard_is_sendable(pinned.keyboard)
+
+
+# --------------------------------------------------------------------------- #
+# End to end — every message, not only the screens
+# --------------------------------------------------------------------------- #
+def test_the_scan_covers_every_module_that_speaks_to_a_person():
+    """A screen is not the only thing this bot sends. An alert and the warning
+    before a login code are messages too, and the one that arrives *unasked*
+    is a poor place to be the only plain icon left."""
+    import inspect
+
+    from app.adminbot import notifier, secrets
+    from app.adminbot.emoji_scan import emoji_in
+    from app.services import archive
+
+    covered = set(views.panel_emoji())
+    for module in (notifier, secrets, archive):
+        for emoticon in emoji_in(inspect.getsource(module)):
+            assert emoticon in covered, f"{module.__name__} draws {emoticon}, unreachable"
+
+
+async def _an_alert_for(session, actor, title: str):
+    """One queued alert, addressed to a user Telegram can actually reach."""
+    from app.db.models import User
+    from app.repositories import admins as admin_repo
+
+    user = await session.get(User, uuid.UUID(actor.id))
+    user.telegram_user_id = ADMIN_CHAT
+    await admin_repo.notify(
+        session,
+        user_id=uuid.UUID(actor.id),
+        kind="rule_paused",
+        title=title,
+        body="Telegram asked for a long wait.",
+        dedupe_key=f"premium-icons-{title}",
+    )
+    await session.commit()
+
+
+async def test_an_alert_carries_premium_icons_like_every_screen(client, actor, session):
+    """The notifier sent straight to the Bot API, around the transform every
+    other message goes through — so an operator with premium icons everywhere
+    still got a plain warning on the one message they did not ask for."""
+    from app.adminbot import notifier
+
+    premium_icons.set_map({"⚠️": "999000333"})
+    await _an_alert_for(session, actor, "Rule paused")
+
+    sent: list[str] = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text, **_kw):
+            sent.append(text)
+
+    delivered = await notifier.drain_once(FakeBot())
+
+    assert delivered == 1
+    assert "tg://emoji?id=999000333" in sent[0], "the same upgrade as a screen"
+    assert_valid_markdown_v2(sent[0])
+
+
+async def test_an_alert_falls_back_to_plain_when_telegram_refuses(client, actor, session):
+    """Same bargain as the panel: a degraded icon is a shrug, a lost alert is
+    the operator not hearing about a paused rule."""
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendMessage
+
+    from app.adminbot import notifier
+
+    premium_icons.set_map({"⚠️": "999000333"})
+    await _an_alert_for(session, actor, "Rule paused")
+
+    sent: list[str] = []
+
+    class RefusingBot:
+        async def send_message(self, chat_id, text, **_kw):
+            sent.append(text)
+            if "tg://emoji" in text:
+                raise TelegramBadRequest(
+                    method=SendMessage(chat_id=1, text=""),
+                    message="Bad Request: can't parse entities: custom emoji",
+                )
+
+    delivered = await notifier.drain_once(RefusingBot())
+
+    assert delivered == 1, "the alert still arrives"
+    assert "tg://emoji" not in sent[-1]
+    assert "Rule paused" in sent[-1]
+
+
+def test_the_library_can_be_read_as_messages_or_as_buttons():
+    """An operator thinks of them separately: the icons on the buttons are one
+    job, the ticks and crosses in what it says back is another."""
+    from app.adminbot.emoji_scan import BUTTON, TEXT, emoji_places
+
+    places = emoji_places()
+    everywhere = views.library_alphabet("all")
+    in_text = views.library_alphabet("text")
+    on_buttons = views.library_alphabet("btn")
+
+    assert set(in_text) | set(on_buttons) == set(everywhere), "no emoji belongs to neither"
+    assert in_text and on_buttons and set(in_text) != set(on_buttons)
+    for emoticon in in_text:
+        assert TEXT in places[emoticon]
+    for emoticon in on_buttons:
+        assert BUTTON in places[emoticon]
+
+
+def test_a_renameable_buttons_emoji_is_known_to_be_a_button():
+    """Those labels become button text without passing through an
+    ``InlineKeyboardButton(...)`` call, so a scan of the call sites alone files
+    every one of them as message text."""
+    from app.adminbot.emoji_scan import BUTTON, leading_emoji
+
+    on_buttons = set(views.library_alphabet("btn"))
+    for label in views.RENAMEABLE_BUTTONS:
+        lead = leading_emoji(label)
+        assert lead in on_buttons, f"{label} is a button, {lead} was not filed as one"
+
+    for label, _style in views.BUTTON_STYLES:
+        assert leading_emoji(label) in on_buttons
+    assert BUTTON  # the constant the classification is written in terms of
+
+
+def test_a_comment_cannot_claim_an_emoji_is_on_a_screen():
+    """``panel_emoji`` reads the raw text on purpose — generous is the right
+    side to err on. The *places* map must not be, or a worked example in a
+    docstring would tell an operator their buttons carry an icon they do not."""
+    from app.adminbot.emoji_scan import emoji_in, emoji_places
+
+    source = "# a comment with 🦄 in it\nBUTTON = '🚀 Go'\n"
+    assert "🦄" in emoji_in(source), "the raw scan sees it"
+
+    places = emoji_places()
+    assert "🦄" not in places

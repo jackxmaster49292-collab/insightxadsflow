@@ -633,8 +633,17 @@ dash.
 
 Tap any emoji to open it on its own, then send the premium emoji you want in
 its place, or paste its id as digits. That replaces the character everywhere
-the panel draws it, in text and on buttons both, and **🚫 Clear** puts it back
-to plain.
+the bot draws it, in message text and on buttons both, and **🚫 Clear** puts it
+back to plain.
+
+Three views, because the two jobs are separate ones: **Everywhere**, **In
+messages** (the ticks and crosses in what it says back to you) and **On
+buttons** (the icons on the buttons themselves). Most emoji are in both lists.
+
+"Everywhere" means everywhere: the alphabet is read from every module that
+sends you a message, not only the screens. An alert about a paused rule and
+the warning shown before a login code go through the same upgrade a screen
+does.
 
 Listing only the matched ones was the smaller screen and the wrong one: the
 emoji you most want to reach is precisely the one extraction could not match,

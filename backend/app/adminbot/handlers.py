@@ -83,36 +83,14 @@ PICK_HINT_RULE = "Tap to select. Only chats this account can post in are listed.
 # Rendering
 # --------------------------------------------------------------------------- #
 async def _deliver(send, text: str, markup=None) -> None:  # type: ignore[no-untyped-def]
-    """Send ``text`` and ``markup``, upgraded to premium icons when mapped.
+    """Every panel message goes out through here — see ``premium_icons``.
 
-    Both surfaces are upgraded at once: mapped emoji in the message text become
-    inline custom emoji, and a button whose label leads with a mapped emoji
-    gets ``icon_custom_emoji_id`` instead. Telegram allows both for a bot with
-    a Fragment username, or — for messages the bot sends directly, which every
-    panel screen is — when the bot's owner has Telegram Premium.
-
-    Best-effort by design: if Telegram rejects the upgraded message, premium
-    icons are suspended and the plain version goes out instead. A degraded
-    icon is a shrug; a blank panel is an outage.
+    Kept as a name of its own because it is called from forty places and the
+    tests reach for it, but the behaviour lives beside the transform it wraps:
+    alerts are sent from a different module entirely and must upgrade the same
+    way, and two copies of a fallback is one copy that eventually differs.
     """
-    # Labels first: their keys are the built-in defaults, and the icon pass
-    # would strip the leading emoji those keys contain. A renamed label is
-    # plain text from the database and carries no rejection risk, so it is
-    # part of the plain retry too — only the premium icons ever fall back.
-    labelled = premium_icons.apply_labels(markup)
-    styled = premium_icons.apply(text)
-    styled_markup = premium_icons.apply_keyboard(labelled)
-    if styled == text and styled_markup is labelled:
-        await send(text, labelled)
-        return
-    try:
-        await send(styled, styled_markup)
-    except TelegramBadRequest as exc:
-        if "message is not modified" in str(exc):
-            raise
-        log.warning("premium_icons_rejected", error=str(exc))
-        premium_icons.suspend()
-        await send(text, labelled)
+    await premium_icons.deliver(send, text, markup)
 
 
 async def _render(target: Message | CallbackQuery, screen: views.Screen) -> None:
@@ -2154,19 +2132,26 @@ async def op_emoji(
         return
 
     if action == "lib":
-        page = 0
+        # op:emoji:lib:<kind>:<page>
         parts = (query.data or "").split(":")
-        if len(parts) > 3 and parts[3].isdigit():
-            page = int(parts[3])
+        kind = parts[3] if len(parts) > 3 else "all"
+        page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
         async with session_scope() as session:
             extracted = await panel_emoji_repo.get_map(session)
-        await _render(query, views.emoji_library(extracted=extracted, page=page))
+        await _render(query, views.emoji_library(extracted=extracted, page=page, kind=kind))
         await query.answer()
         return
 
     if action in ("one", "ask", "del"):
-        emoticon = (query.data or "").split(":", 3)[3] if (query.data or "").count(":") >= 3 else ""
-        alphabet = views.panel_emoji()
+        # op:emoji:<action>:<kind>:<emoji> — the emoji last, because it is the
+        # only part that may contain anything, and splitting from the left
+        # stops at it.
+        parts = (query.data or "").split(":", 4)
+        kind = parts[3] if len(parts) > 3 else "all"
+        emoticon = parts[4] if len(parts) > 4 else ""
+        # Callback data is not trustworthy input: an id set for a character no
+        # screen draws would sit in the table for ever, matching nothing.
+        alphabet = views.library_alphabet(kind)
         if emoticon not in alphabet:
             await query.answer("Unknown emoji.", show_alert=True)
             return
@@ -2175,7 +2160,7 @@ async def op_emoji(
         if action == "ask":
             await state.clear()
             await state.set_state(IconSetup.one)
-            await state.update_data(emoticon=emoticon)
+            await state.update_data(emoticon=emoticon, emoji_kind=kind)
             if isinstance(query.message, Message):
                 await _ask(
                     query.message,
@@ -2199,7 +2184,9 @@ async def op_emoji(
                 premium_icons.set_map(mapping)
         await _render(
             query,
-            views.emoji_one(emoticon=emoticon, custom_id=mapping.get(emoticon), page=page),
+            views.emoji_one(
+                emoticon=emoticon, custom_id=mapping.get(emoticon), page=page, kind=kind
+            ),
         )
         await query.answer("Plain again." if action == "del" else None)
         return
@@ -2309,7 +2296,9 @@ def _one_icon_id(message: Message) -> str | None:
 async def icon_one(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
     data = await state.get_data()
     emoticon = data.get("emoticon")
-    alphabet = views.panel_emoji()
+    stored_kind = data.get("emoji_kind")
+    kind = stored_kind if isinstance(stored_kind, str) else "all"
+    alphabet = views.library_alphabet(kind)
     if not isinstance(emoticon, str) or emoticon not in alphabet:
         await state.clear()
         await _go_home(message, user_id)
@@ -2346,6 +2335,7 @@ async def icon_one(message: Message, user_id: uuid.UUID, state: FSMContext, **_e
             emoticon=emoticon,
             custom_id=custom_id,
             page=alphabet.index(emoticon) // views.LIBRARY_PAGE_SIZE,
+            kind=kind,
         ),
     )
 

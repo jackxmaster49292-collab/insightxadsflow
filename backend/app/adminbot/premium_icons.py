@@ -25,7 +25,11 @@ import re
 import threading
 from typing import Any
 
+import structlog
+
 from app.adminbot.emoji_scan import leading_emoji
+
+_log = structlog.get_logger(__name__)
 
 _lock = threading.Lock()
 _map: dict[str, str] = {}
@@ -226,6 +230,49 @@ def apply_labels(markup: Any) -> Any:
     if not changed:
         return markup
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def deliver(send: Any, text: str, markup: Any = None) -> None:
+    """Send ``text`` and ``markup``, upgraded to premium icons when mapped.
+
+    Both surfaces are upgraded at once: mapped emoji in the message text become
+    inline custom emoji, and a button whose label leads with a mapped emoji
+    gets ``icon_custom_emoji_id`` instead. Telegram allows both for a bot with
+    a Fragment username, or — for messages the bot sends directly, which every
+    message from this bot is — when the bot's owner has Telegram Premium.
+
+    Best-effort by design: if Telegram rejects the upgraded message, premium
+    icons are suspended and the plain version goes out instead. A degraded icon
+    is a shrug; a blank panel is an outage.
+
+    Lives here rather than beside the panel's screens because it is not only
+    the screens: an alert reaches the operator through a different code path
+    entirely, and one that sent plain icons while every screen sent premium
+    ones would look like the feature half-working.
+    """
+    from aiogram.exceptions import TelegramBadRequest
+
+    # Labels first: their keys are the built-in defaults, and the icon pass
+    # would strip the leading emoji those keys contain. A renamed label is
+    # plain text from the database and carries no rejection risk, so it is
+    # part of the plain retry too — only the premium icons ever fall back.
+    labelled = apply_labels(markup)
+    styled = apply(text)
+    styled_markup = apply_keyboard(labelled)
+    if styled == text and styled_markup is labelled:
+        await send(text, labelled)
+        return
+    try:
+        await send(styled, styled_markup)
+    except TelegramBadRequest as exc:
+        # Telegram rejects an edit that changes nothing. That is a normal
+        # outcome of tapping Refresh twice, not a rejection of custom emoji,
+        # and suspending icons over it would turn the whole panel plain.
+        if "message is not modified" in str(exc):
+            raise
+        _log.warning("premium_icons_rejected", error=str(exc))
+        suspend()
+        await send(text, labelled)
 
 
 def apply_keyboard(markup: Any) -> Any:

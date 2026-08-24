@@ -18,6 +18,7 @@ import structlog
 from aiogram import Bot
 from sqlalchemy import select
 
+from app.adminbot import premium_icons
 from app.db.models import User
 from app.db.session import session_scope
 from app.repositories import admins as admin_repo
@@ -53,8 +54,17 @@ async def drain_once(bot: Bot) -> int:
             body = scrub_text(notification.body)
             text = f"⚠️ *{_escape(notification.title)}*\n\n{_escape(body)}"
 
+            chat_id = user.telegram_user_id
+
+            async def send(styled: str, _markup: object, chat_id: int = chat_id) -> None:
+                await bot.send_message(chat_id, styled, parse_mode="MarkdownV2")
+
             try:
-                await bot.send_message(user.telegram_user_id, text, parse_mode="MarkdownV2")
+                # Through the same transform as every panel screen. Sending
+                # here directly was the one path that did not, so an operator
+                # with premium icons everywhere still got a plain ⚠️ on the
+                # one message that arrives unasked.
+                await premium_icons.deliver(send, text)
             except Exception as exc:
                 # A blocked bot or deleted chat must not stall the outbox; the
                 # attempt counter retires it after a few tries.

@@ -1216,8 +1216,15 @@ quietly fetch the wrong ones.
 of them — including 🔗 on the Accounts button and ☑️/⬜️, the tick boxes in the
 group picker — and the loss was silent: a new button simply never got a premium
 icon and nobody noticed.
-**Decision.** ``emoji_scan.panel_emoji()`` reads ``views`` and ``handlers``
-with ``inspect.getsource`` and returns every emoji it finds. Matching is
+**Decision.** ``emoji_scan.panel_emoji()`` reads every module whose strings
+reach a person — ``views``, ``handlers``, ``notifier``, ``secrets``,
+``archive`` — with ``inspect.getsource``, and returns every emoji it finds.
+Screens are the bulk but not all of it; leaving the others out made the
+coverage a coincidence rather than a rule, since each of their emoji happened
+to appear on a screen too. Deliberately *not* every module: ``premium_icons``
+and ``emoji_scan`` spell emoji out in their own documentation, and a ``👨‍👩‍👧``
+used to explain what a ZWJ sequence is would sit in the operator's "no premium
+version" list for ever, describing nothing. Matching is
 generous on purpose — a spare lookup for an emoji in a comment costs half a
 second once, a missed one costs a plain icon among premium ones forever.
 Variation selectors are preserved, because ``⚠`` and ``⚠️`` are different
@@ -1298,6 +1305,36 @@ keeps the icon and colour, since deleting threw away two settings an operator
 never asked to lose. A row that carries only an icon or a colour holds the
 built-in label, and ``get_map`` now excludes those — reporting them as renames
 put ``📣 Ads → 📣 Ads`` on the buttons screen and counted it among the renamed.
+
+### ADR-090 — One send path for every message, screens and alerts alike
+**Context.** The premium-icon upgrade and its fallback lived in
+``handlers._deliver``. Every screen went through it; the notifier called
+``bot.send_message`` directly. An operator with premium icons on all forty
+screens still got a plain ⚠️ on the one message that arrives unasked.
+**Decision.** The transform and the fallback move to ``premium_icons.deliver``
+and both callers use it. ``handlers._deliver`` stays as a name, delegating,
+because forty call sites and the tests reach for it.
+**Consequence.** The alert path now degrades the same way the panel does — if
+Telegram refuses the custom emoji, the plain alert still goes out, because a
+lost alert is the operator not hearing about a paused rule. Two copies of a
+fallback is one copy that eventually differs.
+
+### ADR-091 — The library separates message text from button labels
+**Context.** "Are the message emoji covered too?" is not answerable from a flat
+list, and coverage that cannot be seen reads as coverage that is not there.
+**Decision.** ``emoji_scan.emoji_places()`` classifies each emoji by walking
+the AST: strings passed as ``text=`` to an ``InlineKeyboardButton``, plus the
+module-level tuples of labels, are button text; every other string literal is
+message text. The library offers all three views.
+**Consequence.** The classification reads string *literals* rather than the raw
+source, unlike ``panel_emoji`` — being generous is right for coverage and wrong
+for a caption, since a worked example in a docstring would otherwise tell an
+operator their buttons carry an icon they do not. It is presentation only: the
+transform replaces an emoji wherever it appears, so a wrong label here is a
+wrong caption, never a wrong icon. ``RENAMEABLE_BUTTONS`` and ``BUTTON_STYLES``
+are matched by name because their strings become button text without passing
+through a constructor call, and a guard test asserts every label in them is
+filed as a button.
 
 ---
 

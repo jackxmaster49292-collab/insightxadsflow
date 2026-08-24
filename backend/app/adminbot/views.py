@@ -304,9 +304,10 @@ def premium_icons_status(
         "\n".join(lines),
         _rows(
             [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
-            [InlineKeyboardButton(text="🎨 Library", callback_data="op:emoji:lib:0")]
-            if extracted
-            else [],
+            # Shown whether or not anything is extracted: with nothing stored
+            # the library is not an archive to browse, it is the list of what
+            # still needs doing and the place to do it.
+            [InlineKeyboardButton(text="🎨 Library", callback_data="op:emoji:lib:all:0")],
             [
                 InlineKeyboardButton(
                     text="🔁 Extract again" if extracted else "✨ Extract via account",
@@ -360,22 +361,46 @@ BUTTONS_PAGE_SIZE = 8
 #: Emoji per page in the library. Two to a row, so eight rows plus the pager.
 LIBRARY_PAGE_SIZE = 16
 
+#: The library's three views, keyed by what the callback carries. Message text
+#: and button labels are separable because an operator thinks of them
+#: separately — "the icons on my buttons" is one job, "the ticks and crosses in
+#: what it says back to me" is another.
+LIBRARY_KINDS: tuple[tuple[str, str], ...] = (
+    ("all", "Everywhere"),
+    ("text", "In messages"),
+    ("btn", "On buttons"),
+)
 
-def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
-    """Every emoji the panel draws, mapped or not, each one tappable.
+
+def library_alphabet(kind: str = "all") -> tuple[str, ...]:
+    """The emoji one view of the library covers."""
+    from app.adminbot.emoji_scan import BUTTON, TEXT, emoji_places
+
+    alphabet = panel_emoji()
+    if kind == "all":
+        return alphabet
+    wanted = BUTTON if kind == "btn" else TEXT
+    places = emoji_places()
+    return tuple(e for e in alphabet if wanted in places.get(e, frozenset()))
+
+
+def emoji_library(*, extracted: dict[str, str], page: int, kind: str = "all") -> Screen:
+    """Every emoji this bot draws, mapped or not, each one tappable.
 
     Listing only the mapped ones was the smaller screen and the wrong one: the
     emoji an operator most wants to reach is precisely the one extraction could
     not match, and that was the only one this screen did not show. So the list
-    is the panel's own alphabet — all of it, in source order, with its id if it
-    has one — and every entry leads somewhere.
+    is the whole alphabet, in source order, with its id if it has one — and
+    every entry leads somewhere.
     """
-    alphabet = panel_emoji()
+    kind = kind if kind in dict(LIBRARY_KINDS) else "all"
+    alphabet = library_alphabet(kind)
     window, page, pages = _page_of(alphabet, page, LIBRARY_PAGE_SIZE)
     mapped = sum(1 for e in alphabet if e in extracted)
+    naming = dict(LIBRARY_KINDS)
 
     lines = [
-        f"🎨 *Emoji library* — {len(alphabet)}",
+        f"🎨 *Emoji library* — {escape(naming[kind].lower())}",
         "",
         f"*Premium* {mapped} · *plain* {len(alphabet) - mapped}",
         "",
@@ -402,7 +427,7 @@ def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
             [
                 InlineKeyboardButton(
                     text=f"{e} set" if e in extracted else f"{e} —",
-                    callback_data=f"op:emoji:one:{e}",
+                    callback_data=f"op:emoji:one:{kind}:{e}",
                 )
                 for e in window[i : i + 2]
             ]
@@ -412,14 +437,22 @@ def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
         "\n".join(lines),
         _rows(
             *rows,
-            _pager("op:emoji:lib:", page, pages),
+            _pager(f"op:emoji:lib:{kind}:", page, pages),
+            [
+                InlineKeyboardButton(
+                    text=f"{'• ' if key == kind else ''}{label}",
+                    callback_data=f"op:emoji:lib:{key}:0",
+                )
+                for key, label in LIBRARY_KINDS
+                if key != kind
+            ],
             [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
             _back("op:emoji"),
         ),
     )
 
 
-def emoji_one(*, emoticon: str, custom_id: str | None, page: int) -> Screen:
+def emoji_one(*, emoticon: str, custom_id: str | None, page: int, kind: str = "all") -> Screen:
     """One emoji, and what it will be drawn as.
 
     Reached from the library, and the whole reason it exists is the emoji with
@@ -442,18 +475,22 @@ def emoji_one(*, emoticon: str, custom_id: str | None, page: int) -> Screen:
             "",
             "Send me the premium emoji you want here — from the *animated* "
             "rows of your keyboard — or its id as digits\\. Either way it "
-            "replaces this character everywhere the panel draws it, in text "
-            "and on buttons both\\.",
+            "replaces this character everywhere this bot draws it, in message "
+            "text and on buttons both\\.",
         ]
 
     return Screen(
         "\n".join(lines),
         _rows(
-            [InlineKeyboardButton(text="📥 Send one", callback_data=f"op:emoji:ask:{emoticon}")],
-            [InlineKeyboardButton(text="🚫 Clear", callback_data=f"op:emoji:del:{emoticon}")]
+            [
+                InlineKeyboardButton(
+                    text="📥 Send one", callback_data=f"op:emoji:ask:{kind}:{emoticon}"
+                )
+            ],
+            [InlineKeyboardButton(text="🚫 Clear", callback_data=f"op:emoji:del:{kind}:{emoticon}")]
             if custom_id
             else [],
-            _back(f"op:emoji:lib:{page}"),
+            _back(f"op:emoji:lib:{kind}:{page}"),
         ),
     )
 
