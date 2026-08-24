@@ -1041,3 +1041,114 @@ def test_the_checker_accepts_correctly_paired_formatting():
     assert_valid_markdown_v2("*bold* and _italic_ together")
     assert_valid_markdown_v2("an escaped \\_underscore\\_ is not a delimiter")
     assert_valid_markdown_v2("`a_b` inside code is literal")
+
+
+# --------------------------------------------------------------------------- #
+# Every button reaches exactly one handler
+# --------------------------------------------------------------------------- #
+def _every_callback() -> set[str]:
+    """Every ``callback_data`` the panel's screens can emit.
+
+    Gathered by rendering the screens rather than from a hand-written list,
+    because a hand-written list is exactly the thing that stops matching the
+    code it describes.
+    """
+    from types import SimpleNamespace
+
+    chat = SimpleNamespace(
+        id=uuid.uuid4(), title="A group", chat_kind=SimpleNamespace(value="supergroup")
+    )
+    target = SimpleNamespace(status=JobStatus.succeeded, position=0, last_error_code=None)
+    broadcast = a_broadcast(BroadcastStatus.sending)
+    rule = a_rule(RuleStatus.active)
+    connection = a_connection("active")
+
+    screens = [
+        views.terms(),
+        views.roles(links=[("Support", "https://t.me/x")]),
+        views.publisher_waitlist(joined=False),
+        views.about(),
+        views.home(connections=[connection], rules=[rule], broadcasts=[broadcast], counts={}),
+        views.home(
+            connections=[connection],
+            rules=[rule],
+            broadcasts=[broadcast],
+            counts={},
+            is_operator=True,
+        ),
+        views.ads_list(broadcasts=[broadcast], page=0, can_create=True),
+        views.ad_compose(broadcast=broadcast, target_count=1, estimate_s=0),
+        views.ad_confirm(broadcast=broadcast, target_count=1, estimate_s=0),
+        views.ad_detail(broadcast=broadcast, counts={"succeeded": 1}, target_count=1),
+        views.ad_speed(broadcast=broadcast, target_count=10),
+        views.ad_group_report(broadcast=broadcast, rows=[(target, chat)], page=0),
+        views.archive_settings(current=None, chats=[chat], page=0),
+        views.archive_settings(current="A group", chats=[chat], page=0),
+        views.premium_icons_status(
+            extracted={"🔥": "1"}, live=True, suspended=False, has_user_connection=True
+        ),
+        views.panel_buttons_list(custom={}, page=0),
+        views.connections_list(connections=[connection]),
+        views.connection_detail(connection=connection, chat_count=1),
+        views.confirm_disconnect(connection=connection),
+        views.rules_list(rules=[rule], page=0, can_create=True),
+        views.rule_detail(
+            rule=rule,
+            source_titles=["Source"],
+            destination_count=1,
+            job_counts={},
+            preview="x",
+        ),
+        views.activity(events=[]),
+    ]
+
+    found: set[str] = set()
+    for screen in screens:
+        for row in screen.keyboard.inline_keyboard:
+            for button in row:
+                if button.callback_data:
+                    found.add(button.callback_data)
+    return found
+
+
+async def test_every_button_reaches_exactly_one_handler():
+    """Two handlers claiming one callback is invisible until a button misbehaves.
+
+    It happened: ``arch:bot`` was swallowed by a handler filtered on
+    ``arch:`` and registered earlier, so the button reported "that group is not
+    in your list" while its real handler sat unreachable. Registration order
+    should never be what decides this.
+    """
+    from app.adminbot.handlers import router
+
+    callbacks = _every_callback()
+    assert len(callbacks) > 30, "the sweep should cover the whole panel"
+
+    overlapping: dict[str, list[str]] = {}
+    unclaimed: list[str] = []
+    for data in sorted(callbacks):
+        matched = []
+        for handler in router.callback_query.handlers:
+            ok, _ = await handler.check(a_callback(data))
+            if ok and handler.callback.__name__ != "unknown_callback":
+                matched.append(handler.callback.__name__)
+        if len(matched) > 1:
+            overlapping[data] = matched
+        elif not matched:
+            unclaimed.append(data)
+
+    assert not overlapping, f"more than one handler claims: {overlapping}"
+    assert not unclaimed, f"no handler claims: {unclaimed}"
+
+
+async def test_the_archive_bot_button_reaches_its_own_handler():
+    """The specific regression, named so it cannot come back quietly."""
+    from app.adminbot.handlers import router
+
+    matched = [
+        handler.callback.__name__
+        for handler in router.callback_query.handlers
+        if (await handler.check(a_callback("arch:bot")))[0]
+        and handler.callback.__name__ != "unknown_callback"
+    ]
+    assert matched == ["archive_by_bot"]

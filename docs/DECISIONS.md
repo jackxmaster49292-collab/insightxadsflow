@@ -877,6 +877,25 @@ a rule: when a factory has both a mode switch and a credential check, the mode
 comes first, or the credential silently decides behaviour it was never meant
 to decide.
 
+### ADR-063 — Callback filters must not overlap, and a test proves it
+**Context.** The 🤖 *Use a group the bot is in* button answered "that group is
+not in your list". Its handler was fine; it never ran. ``set_archive`` was
+filtered on ``startswith("arch:")``, which also matches ``arch:bot``, and being
+registered earlier it won — then read the word "bot" as a chat id. Nothing in
+the code was wrong except that **registration order silently decided
+behaviour**.
+**Decision.** Filters are narrowed so no two handlers claim the same callback:
+``arch:s:``/``arch:off`` for one handler, ``arch:bot`` for the other, and the
+``ad:``/``rule:`` catch-alls now exclude ``ad:new``/``rule:new`` explicitly. A
+test renders every panel screen, collects each ``callback_data`` a button can
+emit, and asserts exactly one non-fallback handler matches it.
+**Consequence.** The test found two more instances immediately —
+``ad:new`` and ``rule:new`` were each claimed by two handlers, working only
+because the specific ones happened to be registered first. A latent version of
+the same outage, in the two most-used buttons in the panel. The sweep is built
+by rendering screens rather than from a list of strings, because a list is the
+thing that stops matching the code it describes.
+
 ---
 
 ## Open tradeoffs

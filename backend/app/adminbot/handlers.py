@@ -331,7 +331,11 @@ async def nav_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -
     await query.answer()
 
 
-@router.callback_query(F.data.startswith("arch:"))
+# Narrow, non-overlapping filters. ``startswith("arch:")`` also swallowed
+# ``arch:bot``, whose own handler is registered later and so never ran — the
+# button reported "that group is not in your list" because this handler read
+# "bot" as a chat id.
+@router.callback_query(F.data.startswith("arch:s:") | (F.data == "arch:off"))
 async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
     parts = (query.data or "").split(":")
     verb = parts[1] if len(parts) > 1 else ""
@@ -1427,7 +1431,9 @@ _AD_PROMPTS = {
 }
 
 
-@router.callback_query(F.data.startswith("ad:"))
+# Excludes ``ad:new`` explicitly. It only worked because that handler happens
+# to be registered first, and registration order is not a thing to depend on.
+@router.callback_query(F.data.startswith("ad:") & (F.data != "ad:new"))
 async def ad_actions(
     query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
 ) -> None:
@@ -2054,7 +2060,8 @@ async def rule_source(
     log.info("rule_created_via_bot", rule_id=str(rule_id))
 
 
-@router.callback_query(F.data.startswith("rule:"))
+# Excludes ``rule:new``, for the same reason as ``ad:new`` above.
+@router.callback_query(F.data.startswith("rule:") & (F.data != "rule:new"))
 async def rule_actions(
     query: CallbackQuery, user_id: uuid.UUID, state: FSMContext, **_extra: Any
 ) -> None:
