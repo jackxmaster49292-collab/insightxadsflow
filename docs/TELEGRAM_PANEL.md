@@ -305,8 +305,11 @@ For a **private** group the index also records what the group says about
 itself — its bio and its member count — because months later the title alone
 is hard to recognise, and finding a private group again is exactly the hard
 part. (That is the group's own description, a thing Telegram publishes about
-the chat; nothing reads its members.) These details are learned a few groups
-per round and remembered, so a big list fills in over the first few rounds.
+the chat; nothing reads its members.) **Every** private group in the round is
+covered — the first big round spends a couple of minutes learning them before
+the archive is posted, and after that they are remembered. If Telegram asks
+for a long wait mid-way, the rest carry over and every following round keeps
+trying until each one is learned.
 
 The copy is the part that survives all of that. That is why it goes first.
 

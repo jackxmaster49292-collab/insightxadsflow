@@ -371,7 +371,7 @@ async def test_a_failing_details_lookup_still_archives_the_rest(client, actor, s
     broadcast = await session.get(Broadcast, ctx["broadcast_id"])
     keep = await _with_archive(session, actor, ctx)
     script = script_for(ctx["connection_id"])
-    script.fail_method("chat_details", RuntimeError("FLOOD_WAIT_42"))
+    script.fail_method("chat_details", RuntimeError("lookup exploded"))
     await broadcast_service.queue(session, broadcast=broadcast)
     await session.commit()
 
@@ -383,13 +383,18 @@ async def test_a_failing_details_lookup_still_archives_the_rest(client, actor, s
     assert "Group 01" in index and "t.me/c/" in index, "links survive a failed lookup"
 
 
-async def test_the_per_round_lookup_cap_is_respected(client, actor, session):
-    from app.services.archive import _DETAILS_PER_ROUND
+async def test_every_private_group_is_covered_in_one_round(client, actor, session, monkeypatch):
+    """A capped version was offered and rejected, correctly: an archive that
+    identifies only some of the groups is not a record. All of them, one
+    round, taking the time it takes."""
+    from app.services import archive as archive_module
 
-    groups = _DETAILS_PER_ROUND + 5
+    monkeypatch.setattr(archive_module, "_DETAILS_GAP_S", 0)
+
+    groups = 40
     ctx = await build_broadcast(actor, session, groups=groups, delay_ms=0)
     broadcast = await session.get(Broadcast, ctx["broadcast_id"])
-    await _with_archive(session, actor, ctx)
+    keep = await _with_archive(session, actor, ctx)
     script = script_for(ctx["connection_id"])
     await _details_for(session, ctx, script)
     await broadcast_service.queue(session, broadcast=broadcast)
@@ -398,7 +403,149 @@ async def test_the_per_round_lookup_cap_is_respected(client, actor, session):
     await drain(session, broadcast.id)
     await session.commit()
 
-    assert len(script.calls_to("chat_details")) == _DETAILS_PER_ROUND
+    assert len(script.calls_to("chat_details")) == groups, "no group left out"
+    sends = script.calls_to("send_text")
+    index = "\n".join(c.args[1] for c in sends if c.args[0].peer_id == keep.peer_id)
+    assert index.count("12,400 members") == groups, "and every one is identified"
+
+
+async def test_a_failed_lookup_is_retried_every_round_until_learned(
+    client, actor, session, monkeypatch
+):
+    """ "Try again in the second round, as many times as it takes" — a failure
+    leaves the chat unmarked, so every later round asks again."""
+    from app.services import archive as archive_module
+
+    monkeypatch.setattr(archive_module, "_DETAILS_GAP_S", 0)
+
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    keep = await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    script.fail_method("chat_details", RuntimeError("telegram hiccup"))
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)  # round 1: lookup fails
+    await session.commit()
+    round_one = len(script.calls_to("chat_details"))
+    assert round_one > 0
+
+    # The hiccup clears; round two asks again and this time it sticks.
+    script.method_errors.clear()
+    await _details_for(session, ctx, script)
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert len(script.calls_to("chat_details")) > round_one, "round two asked again"
+    sends = script.calls_to("send_text")
+    index = [c for c in sends if c.args[0].peer_id == keep.peer_id][-1].args[1]
+    assert "12,400 members" in index
+
+
+async def test_a_long_telegram_wait_defers_the_rest_to_next_round(
+    client, actor, session, monkeypatch
+):
+    """A wait past the ceiling is never shortened — the walk stops instead,
+    and the unlearned chats stay unmarked for the next round."""
+    from app.adapters.errors import AdapterError, ErrorClass
+    from app.domain import reasons
+    from app.services import archive as archive_module
+
+    monkeypatch.setattr(archive_module, "_DETAILS_GAP_S", 0)
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    keep = await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    script.fail_method(
+        "chat_details",
+        AdapterError(reasons.FLOOD_WAIT, ErrorClass.RATE_LIMIT, retry_after_s=3_000),
+    )
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert len(script.calls_to("chat_details")) == 1, "stopped at the first long wait"
+    sends = script.calls_to("send_text")
+    index = [c for c in sends if c.args[0].peer_id == keep.peer_id][-1].args[1]
+    assert "t.me/c/" in index, "the record itself still goes out"
+
+    unmarked = (
+        (
+            await session.execute(
+                select(TelegramChat).where(
+                    TelegramChat.id.in_(ctx["chat_ids"]),
+                    TelegramChat.details_synced_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(unmarked) == len(ctx["chat_ids"]), "all still owed, all retried next round"
+
+
+async def test_a_short_telegram_wait_is_obeyed_then_the_walk_continues(
+    client, actor, session, monkeypatch
+):
+    """Under the ceiling the wait is served in place — obeyed in full, never
+    shortened — and the round still ends fully covered."""
+    from app.adapters.errors import AdapterError, ErrorClass
+    from app.domain import reasons
+    from app.services import archive as archive_module
+
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(archive_module, "_sleep", fake_sleep)
+    monkeypatch.setattr(archive_module, "_DETAILS_GAP_S", 0)
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    await _details_for(session, ctx, script)
+    # One wait, then Telegram relents (the mock raises only while set).
+    script.fail_method(
+        "chat_details",
+        AdapterError(reasons.FLOOD_WAIT, ErrorClass.RATE_LIMIT, retry_after_s=42),
+    )
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    # Clear the error as soon as the first wait is recorded, like Telegram
+    # letting the next call through after the wait was served.
+    original = fake_sleep
+
+    async def sleep_then_clear(seconds: float) -> None:
+        await original(seconds)
+        script.method_errors.clear()
+
+    monkeypatch.setattr(archive_module, "_sleep", sleep_then_clear)
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert 42 in slept, "Telegram's number, served in full"
+    synced = (
+        (
+            await session.execute(
+                select(TelegramChat).where(
+                    TelegramChat.id.in_(ctx["chat_ids"]),
+                    TelegramChat.details_synced_at.isnot(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(synced) == len(ctx["chat_ids"]), "the walk finished after the wait"
 
 
 async def test_a_long_bio_is_clipped_not_dominant(client, actor, session):

@@ -822,6 +822,27 @@ person. Public groups spend none of the lookup budget: a username is already
 a durable way back. A failed lookup costs the bio line only; the copy and the
 links are the record, and they go out regardless.
 
+### ADR-060 — Every private group is identified, at the operator's word
+**Context.** ADR-059 capped detail lookups at 25 per round. The operator
+rejected the cap, correctly: "if it stays limited, what was the point — take a
+little time but do it, and try again in the next round as many times as it
+takes." An archive that identifies only some of the groups is not the record
+they asked for.
+**Decision.** The cap is gone. Every private group in the round is walked,
+still paced at 500 ms. A Telegram wait up to 60 s is **obeyed in full, in
+place**, then that chat is tried once more; a longer wait stops the walk —
+stopped, never shortened — and the remainder carries to the next round. A
+failed lookup leaves the chat unmarked, so every later round asks again until
+it is learned. A ten-minute budget backstops one round's walk; at the normal
+pace that allows ~1000 lookups, double the broadcast ceiling, so it only fires
+under repeated waits — exactly when pressing on would lengthen them.
+**Consequence.** The first round over 150 private groups spends about two
+minutes in the walk before the copy and index go out; the operator chose that
+price knowingly, and later rounds cost nothing because details are cached. A
+test regression here was instructive: an error string spelled ``FLOOD_WAIT_42``
+began *actually waiting 42 seconds* once the walk learned to obey waits — the
+suite caught the new behaviour working.
+
 ---
 
 ## Open tradeoffs

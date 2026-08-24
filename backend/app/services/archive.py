@@ -38,12 +38,27 @@ log = structlog.get_logger(__name__)
 #: Telegram's message ceiling, with room left for the header of each chunk.
 _CHUNK_BUDGET = 3_600
 
-#: How many chats' details to fetch per archived round, and the pause between
-#: fetches. ``GetFullChannel`` is one of Telegram's most eagerly rate-limited
-#: calls, so this is bounded and paced rather than "all 500 now" — details are
-#: cached on the chat row, so repeat rounds converge to full coverage.
-_DETAILS_PER_ROUND = 25
+#: Pause between detail lookups. ``GetFullChannel`` is one of Telegram's most
+#: eagerly rate-limited calls, so the walk is paced — but it covers **every**
+#: private group in the round. The operator was offered a capped version and
+#: rejected it, correctly: an archive that identifies only some of the groups
+#: is not the record they asked for. The price is time — ~2 minutes for 150
+#: private groups on the first round — and details are cached on the chat row,
+#: so later rounds cost nothing.
 _DETAILS_GAP_S = 0.5
+
+#: A Telegram-supplied wait up to this long is obeyed in place, mid-walk.
+#: Longer than this, the walk stops and the remainder is picked up next round —
+#: stopped, never shortened.
+_DETAILS_WAIT_CEILING_S = 60.0
+
+#: Backstop on one round's walk. At the normal pace this allows ~1000 lookups,
+#: double the broadcast ceiling, so it only ever fires when Telegram is
+#: throwing repeated waits — exactly when continuing would make things worse.
+_DETAILS_TIME_BUDGET_S = 600.0
+
+#: Test seam: the module sleeps through this name so a test can stub it.
+_sleep = asyncio.sleep
 
 #: Re-learn a chat's details after this long. Bios change; the archive's value
 #: is recognising the group *later*, so a years-old bio serves that less.
@@ -84,30 +99,66 @@ async def _fill_details(
     Only groups whose link is not durable: a public group is already findable
     by its username, but a private one is exactly the group that is hard to
     find again months later — which is why the operator asked for the bio, "so
-    nothing is lost". Bounded and paced, cached on the chat row, so full
-    coverage arrives over rounds without hammering Telegram's most eagerly
-    rate-limited lookup in one burst.
+    nothing is lost". **Every** such group in the round is walked, paced, with
+    each Telegram wait obeyed in place up to a ceiling; a longer wait stops the
+    walk and the remainder is picked up next round. A chat whose lookup fails
+    is not marked synced, so it is retried on every later round until it is
+    learned — the operator asked for exactly that persistence.
     """
+    import time
     from datetime import UTC, datetime, timedelta
 
+    from app.adapters.errors import ErrorClass, classify_error
+
     stale_before = datetime.now(UTC) - timedelta(days=_DETAILS_STALE_DAYS)
-    fetched = 0
+    started = time.monotonic()
+
     for _target, chat in rows:
-        if fetched >= _DETAILS_PER_ROUND:
-            log.info("archive_details_deferred", reason="per-round cap; next round continues")
-            break
         if chat.username:
             continue
         if chat.details_synced_at is not None and chat.details_synced_at > stale_before:
             continue
+        if time.monotonic() - started > _DETAILS_TIME_BUDGET_S:
+            # Only reachable under repeated Telegram waits — the one situation
+            # where pressing on would make the waits longer.
+            log.info("archive_details_deferred", reason="time budget; next round continues")
+            break
+
         try:
             details = await adapter.chat_details(chat_repo.to_ref(chat))
         except Exception as exc:
-            log.warning("archive_details_failed", chat_id=str(chat.id), error=str(exc))
-            continue
+            classified = classify_error(exc)
+            wait = classified.retry_after_s
+            if (
+                classified.error_class is ErrorClass.RATE_LIMIT
+                and wait
+                and wait <= _DETAILS_WAIT_CEILING_S
+            ):
+                # Obeyed in full, in place, then one more try for this chat.
+                await _sleep(wait)
+                try:
+                    details = await adapter.chat_details(chat_repo.to_ref(chat))
+                except Exception as retry_exc:
+                    log.warning(
+                        "archive_details_failed",
+                        chat_id=str(chat.id),
+                        error=str(retry_exc),
+                    )
+                    continue
+            elif classified.error_class is ErrorClass.RATE_LIMIT and wait:
+                log.info(
+                    "archive_details_deferred",
+                    reason=f"telegram asked for {wait:.0f}s; next round continues",
+                )
+                break
+            else:
+                # Unmarked, therefore retried next round — and every round
+                # after, until it is learned.
+                log.warning("archive_details_failed", chat_id=str(chat.id), error=str(exc))
+                continue
+
         await chat_repo.set_details(session, chat=chat, details=details)
-        fetched += 1
-        await asyncio.sleep(_DETAILS_GAP_S)
+        await _sleep(_DETAILS_GAP_S)
 
 
 def _index_lines(rows: list[tuple[BroadcastTarget, TelegramChat]]) -> list[str]:
