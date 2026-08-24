@@ -123,79 +123,6 @@ def _link_row(links: Sequence[tuple[str, str]]) -> list[InlineKeyboardButton]:
     return [InlineKeyboardButton(text=label, url=url) for label, url in links]
 
 
-def roles(*, links: Sequence[tuple[str, str]] = ()) -> Screen:
-    """The first screen: which side of the marketplace are you on?
-
-    Asked before anything else because the two answers need completely
-    different screens, and a panel that assumes the wrong one wastes the first
-    minute of everybody who is not an advertiser.
-    """
-    lines = [
-        "📡 *InsightAdFlow*",
-        "",
-        "Create, schedule and track Telegram group advertisements from one place\\.",
-        "",
-        "*Which describes you?*",
-        "",
-        "📣 *Advertiser* — you have a message and groups you have already "
-        "joined\\. Post to all of them, on a schedule, and see what landed\\.",
-        "",
-        "🏘 *Publisher / Group owner* — you run groups and want paid ads placed in them\\.",
-        "",
-        "📊 *Insights* — what your ads actually did: which groups received "
-        "them, which did not, and why\\.",
-    ]
-    rows = [
-        [InlineKeyboardButton(text="📣 Advertiser", callback_data="role:adv")],
-        [InlineKeyboardButton(text="🏘 Publisher / Group owner", callback_data="role:pub")],
-        [InlineKeyboardButton(text="📊 Insights", callback_data="role:ins")],
-    ]
-    link_row = _link_row(links)
-    return Screen("\n".join(lines), _rows(*rows, link_row))
-
-
-def publisher_waitlist(*, joined: bool, links: Sequence[tuple[str, str]] = ()) -> Screen:
-    """Honest about a side of the product that does not exist yet.
-
-    Everything else in this bot posts *your* message to groups *you* joined.
-    Placing paid ads in someone else's groups is a different product — it needs
-    listings, pricing, escrow and moderation, none of which are built. Saying
-    so beats a screen that looks like a feature and does nothing.
-    """
-    lines = [
-        "🏘 *Publisher / Group owner*",
-        "",
-        "This side is *not open yet*, and it would be dishonest to pretend otherwise\\.",
-        "",
-        "What it will be: you list the groups you run, set a price, and "
-        "advertisers pay to place ads in them\\. That needs listings, pricing, "
-        "payment held until delivery, and moderation — none of which exist "
-        "today\\.",
-        "",
-        "What works *right now*: if you run groups and want to post your own "
-        "message across all of them, that is the *Advertiser* side, and it is "
-        "fully built\\.",
-    ]
-    if joined:
-        lines += ["", "✅ You are on the list — you will be messaged when it opens\\."]
-
-    return Screen(
-        "\n".join(lines),
-        _rows(
-            []
-            if joined
-            else [
-                InlineKeyboardButton(
-                    text="🔔 Tell me when it opens", callback_data="role:pub:notify"
-                )
-            ],
-            [InlineKeyboardButton(text="📣 Use the Advertiser side", callback_data="role:adv")],
-            _link_row(links),
-            _back("nav:roles"),
-        ),
-    )
-
-
 def about(*, links: Sequence[tuple[str, str]] = ()) -> Screen:
     lines = [
         "📡 *InsightAdFlow*",
@@ -422,7 +349,6 @@ RENAMEABLE_BUTTONS: tuple[str, ...] = (
     "➕ New ad",
     "➕ New rule",
     "➕ Add account",
-    "➕ Add bot",
     "✏️ Message",
     "🖼 Image",
     "⏱ Pause",
@@ -604,8 +530,6 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
             "this works only for an account other than the one you are messaging "
             "me from\\._",
             "",
-            "*Bot* — a bot from @BotFather\\. It can only post where you have added "
-            "it as an administrator\\.",
         ]
     else:
         healthy = [c for c in connections if c.status.value == "active"]
@@ -641,10 +565,7 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
         InlineKeyboardMarkup(
             inline_keyboard=[
                 *buttons,
-                [
-                    InlineKeyboardButton(text="➕ Add account", callback_data="add:user"),
-                    InlineKeyboardButton(text="➕ Add bot", callback_data="add:bot"),
-                ],
+                [InlineKeyboardButton(text="➕ Add account", callback_data="add:user")],
                 _home_row(),
             ]
         ),
@@ -657,7 +578,12 @@ UNFINISHED = ("pending", "awaiting_code", "awaiting_2fa")
 
 
 def connection_detail(
-    *, connection: TelegramConnection, chat_count: int, syncing: bool = False
+    *,
+    connection: TelegramConnection,
+    chat_count: int,
+    syncing: bool = False,
+    counts: dict[str, int] | None = None,
+    ads: int = 0,
 ) -> Screen:
     lines = [
         f"{icon(connection.status.value)} *{escape(connection.label)}*",
@@ -666,6 +592,21 @@ def connection_detail(
         f"*Status* — {escape(connection.status.value)}",
         f"*Groups known* — {chat_count}",
     ]
+
+    counts = counts or {}
+    delivered = counts.get("forwarded", 0)
+    missed = counts.get("skipped", 0) + counts.get("failed", 0)
+    if ads or delivered or missed:
+        # All-time, and split the way the question is actually asked: how much
+        # went out from this account, and how much did not.
+        lines += [
+            "",
+            f"*Ads from this account* — {ads}",
+            f"*Delivered* — {delivered}",
+            f"*Did not arrive* — {missed}",
+        ]
+        if counts.get("retry_scheduled"):
+            lines.append(f"*Retrying* — {counts['retry_scheduled']}")
     if connection.telegram_username:
         lines.append(f"*Telegram* — @{escape(connection.telegram_username)}")
     if connection.last_error_message_safe:
@@ -1223,7 +1164,10 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
             ],
             [InlineKeyboardButton(text="🚫 Stop", callback_data=f"ad:{broadcast.id}:cancel")]
             if stoppable
-            else [],
+            # An ad that is not running can be removed from the list. While it
+            # is running, Stop comes first — one destructive button at a time,
+            # and they mean different things.
+            else [InlineKeyboardButton(text="🗑 Delete", callback_data=f"ad:{broadcast.id}:askdel")],
             [InlineKeyboardButton(text="⬅️ Ads", callback_data="nav:ads:0"), *_home_row()],
         ),
     )
@@ -1542,6 +1486,19 @@ def rule_detail(
                 InlineKeyboardButton(text="🗑 Delete", callback_data=f"rule:{rule.id}:askdel"),
             ],
             [InlineKeyboardButton(text="⬅️ Rules", callback_data="nav:rules:0"), *_home_row()],
+        ),
+    )
+
+
+def confirm_delete_ad(*, broadcast: Broadcast) -> Screen:
+    return Screen(
+        f"🗑 *Delete {escape(broadcast.name)}?*\n\n"
+        "This removes the ad and its record of which groups received it\\.\n\n"
+        "Messages already posted stay where they are — deleting cannot unsend "
+        "anything\\.",
+        _rows(
+            [InlineKeyboardButton(text="Yes, delete", callback_data=f"ad:{broadcast.id}:del")],
+            [InlineKeyboardButton(text="Cancel", callback_data=f"ad:{broadcast.id}")],
         ),
     )
 

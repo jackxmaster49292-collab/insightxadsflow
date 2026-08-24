@@ -95,6 +95,17 @@ async def current_draft(session: AsyncSession, *, user_id: uuid.UUID) -> Broadca
     return result.scalars().first()
 
 
+async def remove(session: AsyncSession, *, broadcast: Broadcast) -> None:
+    """Remove an ad and its target rows. It does not unsend anything.
+
+    Deliberately allowed for a *stopped* or finished ad only — the caller
+    checks that. Deleting one mid-flight would drop rows the worker is holding
+    leases on, and the record of where it had already posted with them.
+    """
+    await session.delete(broadcast)
+    await session.flush()
+
+
 async def discard_drafts(session: AsyncSession, *, user_id: uuid.UUID) -> int:
     result = await session.execute(
         delete(Broadcast)

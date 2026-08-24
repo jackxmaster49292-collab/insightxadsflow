@@ -20,7 +20,6 @@ import contextlib
 import math
 import re
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -289,26 +288,8 @@ async def start(
     is_operator: bool = False,
     **_extra: Any,
 ) -> None:
-    """The roles, then the panel.
-
-    Asked once, on the first /start only: someone who has already connected an
-    account and run ads has answered it, and asking again every time would put
-    a question in front of the thing they came to use.
-    """
     await state.clear()
-    async with session_scope() as session:
-        connections = await connection_repo.list_for_user(session, user_id=user_id)
-        broadcasts = await broadcast_repo.list_for_user(session, user_id=user_id)
-    if connections or broadcasts:
-        await _go_home(message, user_id, is_operator=is_operator)
-        return
-    await _send(message, views.roles(links=get_settings().public_links))
-
-
-@router.callback_query(F.data == "nav:roles")
-async def nav_roles(query: CallbackQuery, **_extra: Any) -> None:
-    await _render(query, views.roles(links=get_settings().public_links))
-    await query.answer()
+    await _go_home(message, user_id, is_operator=is_operator)
 
 
 async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
@@ -501,64 +482,6 @@ def _forwarded_chat_id(message: Message) -> int | None:
 async def nav_about(query: CallbackQuery, **_extra: Any) -> None:
     await _render(query, views.about(links=get_settings().public_links))
     await query.answer()
-
-
-@router.callback_query(F.data.startswith("role:"))
-async def choose_role(
-    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
-) -> None:
-    parts = (query.data or "").split(":")
-    role = parts[1] if len(parts) > 1 else ""
-    links = get_settings().public_links
-
-    if role == "adv":
-        await _go_home(query, user_id, is_operator=is_operator)
-        await query.answer()
-        return
-
-    if role == "ins":
-        # Not a separate product — the same numbers this bot already records,
-        # reached directly. Calling it anything more would be a claim the code
-        # does not support.
-        async with session_scope() as session:
-            events = await event_repo.list_recent_for_user(session, user_id=user_id, limit=12)
-        await _render(query, views.activity(events=events, back="nav:roles"))
-        await query.answer()
-        return
-
-    if role == "pub":
-        joined = False
-        if len(parts) > 2 and parts[2] == "notify":
-            async with session_scope() as session:
-                user = await user_repo.get_by_id(session, user_id)
-                if user is not None and user.publisher_interest_at is None:
-                    user.publisher_interest_at = datetime.now(UTC)
-                joined = user is not None
-            await query.answer("Noted — you will be messaged if it opens.")
-        else:
-            async with session_scope() as session:
-                user = await user_repo.get_by_id(session, user_id)
-                joined = bool(user and user.publisher_interest_at)
-            await query.answer()
-        await _render(query, views.publisher_waitlist(joined=joined, links=links))
-        return
-
-    await query.answer()
-
-
-# ``/panel`` is no longer advertised — ``/start`` is the way in — but it keeps
-# working, because a command someone has been typing for weeks should not begin
-# doing nothing.
-@router.message(Command("panel", "home", "status"))
-async def panel(
-    message: Message,
-    user_id: uuid.UUID,
-    state: FSMContext,
-    is_operator: bool = False,
-    **_extra: Any,
-) -> None:
-    await state.clear()
-    await _go_home(message, user_id, is_operator=is_operator)
 
 
 @router.message(Command("cancel"))
@@ -1126,8 +1049,14 @@ async def connection_actions(query: CallbackQuery, user_id: uuid.UUID, **_extra:
             kind=ControlTaskKind.sync_chats,
             connection_id=connection.id,
         )
+        counts = await event_repo.summary_for_connection(session, connection_id=connection.id)
+        broadcasts = await broadcast_repo.list_for_user(session, user_id=user_id)
         screen = views.connection_detail(
-            connection=connection, chat_count=len(chats), syncing=running is not None
+            connection=connection,
+            chat_count=len(chats),
+            syncing=running is not None,
+            counts=counts,
+            ads=sum(1 for b in broadcasts if b.connection_id == connection.id),
         )
 
     await _render(query, screen)
@@ -1575,6 +1504,31 @@ async def ad_actions(
                 ),
             )
             await query.answer()
+            return
+
+        if action == "askdel":
+            await _render(query, views.confirm_delete_ad(broadcast=broadcast))
+            await query.answer()
+            return
+
+        if action == "del":
+            # Checked again here, not only by the button being hidden: a
+            # callback can be replayed, and deleting a running ad would drop
+            # rows the worker is holding leases on.
+            if broadcast.status in (BroadcastStatus.sending, BroadcastStatus.paused):
+                await query.answer("Stop it first, then delete.", show_alert=True)
+                return
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="broadcast.delete",
+                object_type="broadcast",
+                object_id=str(broadcast.id),
+                payload={"name": broadcast.name},
+            )
+            await broadcast_repo.remove(session, broadcast=broadcast)
+            await _render(query, await _ads_screen(user_id, page=0))
+            await query.answer("Deleted.")
             return
 
         if action == "groups":

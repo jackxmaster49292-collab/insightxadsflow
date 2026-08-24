@@ -494,3 +494,63 @@ async def test_alert_for_an_account_with_no_telegram_id_is_retired(client, sessi
     session.expire_all()
     row = (await session.execute(select(AdminNotification))).scalar_one()
     assert row.sent_at is not None
+
+
+def test_the_connection_screen_reports_what_that_account_did():
+    """The Accounts screen said what an account *is*; this says what it has
+    done, which is the question anyone opens it with."""
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Jack",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+        telegram_username="Insightxstorex",
+        last_error_message_safe=None,
+    )
+    screen = views.connection_detail(
+        connection=connection,
+        chat_count=720,
+        counts={"forwarded": 147, "skipped": 8, "failed": 1, "retry_scheduled": 2},
+        ads=10,
+    )
+
+    assert "Groups known* — 720" in screen.text
+    assert "Ads from this account* — 10" in screen.text
+    assert "Delivered* — 147" in screen.text
+    assert "Did not arrive* — 9", "skipped and failed together"
+    assert "Retrying* — 2" in screen.text
+
+
+def test_a_fresh_connection_shows_no_empty_counters():
+    """Four zeroes on a brand-new account is noise, not information."""
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Jack",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+        telegram_username=None,
+        last_error_message_safe=None,
+    )
+    screen = views.connection_detail(connection=connection, chat_count=0, counts={}, ads=0)
+    assert "Ads from this account" not in screen.text
+
+
+def test_the_accounts_screen_no_longer_offers_a_bot():
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Jack",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+        telegram_username=None,
+        last_error_message_safe=None,
+    )
+    screen = views.connections_list(connections=[connection])
+    callbacks = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+    assert "add:user" in callbacks
+    assert "add:bot" not in callbacks

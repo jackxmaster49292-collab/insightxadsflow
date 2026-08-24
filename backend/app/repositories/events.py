@@ -141,6 +141,26 @@ async def summary(
     return counts
 
 
+async def summary_for_connection(
+    session: AsyncSession, *, connection_id: uuid.UUID
+) -> dict[str, int]:
+    """Everything this one account has done, for all time.
+
+    Not windowed like ``summary``: the connection screen answers "what has this
+    account been up to", and a 24-hour view of an account that last ran an ad
+    on Tuesday reads as though it has never done anything.
+    """
+    result = await session.execute(
+        select(ForwardingEvent.outcome, func.count())
+        .where(ForwardingEvent.connection_id == connection_id)
+        .group_by(ForwardingEvent.outcome)
+    )
+    counts = {outcome.value: 0 for outcome in EventOutcome}
+    for outcome, count in result.all():
+        counts[outcome.value] = int(count)
+    return counts
+
+
 async def audit(
     session: AsyncSession,
     *,

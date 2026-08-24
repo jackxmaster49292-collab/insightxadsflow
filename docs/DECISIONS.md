@@ -1033,6 +1033,44 @@ would be a line on the About screen or a note when an account is switched on
 for archiving — not a gate. Flagged rather than silently accepted, because the
 setting defaults to copying everyone.
 
+### ADR-072 — The role picker and the publisher waitlist are removed
+**Context.** ADR-052 asked new arrivals which side of a marketplace they were
+on, and ADR-053 kept an honest "not built" screen for the publisher side. With
+the terms gate gone the operator wanted ``/start`` to be the panel, full stop.
+**Decision.** Both screens, the ``role:`` callbacks and
+``users.publisher_interest_at`` are removed. Adding a bot connection goes off
+the Accounts screen too — this deployment posts from a real account, and the
+bot-connection path was a second way to do a thing nobody does here. The HTTP
+API keeps it, so nothing that existed stops working.
+**Consequence.** ``/start`` shows the panel to everyone, first time or
+thousandth. The waitlist recorded nothing worth keeping — demand for a side
+that was never built, from a deployment with one user.
+
+### ADR-073 — A connection screen reports what that account has done
+**Context.** The connection screen said what an account *is* — type, status,
+groups known. What anyone opens it for is what it has been doing.
+**Decision.** All-time counters per connection: ads created, delivered, did not
+arrive, retrying. Not windowed like the home summary was, because a 24-hour
+view of an account that last ran an ad on Tuesday reads as though it has never
+done anything. Hidden entirely when all four are zero, since four zeroes on a
+new account is noise.
+**Consequence.** "Did not arrive" folds skipped and failed together on purpose:
+from the outside they are the same event, and the per-group report already
+separates them with a reason each.
+
+### ADR-074 — An ad can be deleted, once it has stopped
+**Context.** Finished and cancelled ads accumulated in the list with no way to
+clear them.
+**Decision.** 🗑 Delete appears only when an ad is *not* running, behind a
+confirmation that states plainly what deleting does not do. The status is
+re-checked in the handler, not only by hiding the button: a callback can be
+replayed, and deleting mid-flight would drop target rows the worker is holding
+leases on.
+**Consequence.** While an ad runs the same slot holds Stop — one destructive
+button at a time, and they mean different things. Deleting removes the ad and
+its per-group record; it cannot unsend a single message, which the confirmation
+says.
+
 ---
 
 ## Open tradeoffs

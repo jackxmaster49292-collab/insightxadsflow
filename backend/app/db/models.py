@@ -192,10 +192,6 @@ class User(Base, TimestampMixin):
     #: same today but mean different things, and only one of them should change
     #: when the default is flipped.
     archive_ads: Mapped[bool | None] = mapped_column(Boolean)
-    #: When this person asked to be told the publisher side had opened. Kept as
-    #: a timestamp rather than a flag so the operator can see *demand over
-    #: time*, which is the only thing that would justify building it.
-    publisher_interest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Nullable: a Telegram-only account never sets a password.
     password_hash: Mapped[str | None] = mapped_column(Text)
 

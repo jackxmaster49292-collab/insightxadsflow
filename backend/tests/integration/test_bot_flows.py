@@ -224,34 +224,14 @@ def _reset_sent():
 # --------------------------------------------------------------------------- #
 # Home and navigation
 # --------------------------------------------------------------------------- #
-async def test_a_first_start_asks_which_side_you_are_on(client, actor, state):
-    """The two answers need entirely different screens, so a panel that
-    assumes advertiser wastes the first minute of everyone who is not one."""
+async def test_start_opens_the_panel(client, actor, state):
+    """No gate and no question in front of it: /start is the panel."""
     await handlers.start(a_message("/start"), user_id=uuid.UUID(actor.id), state=state)
 
     assert "InsightAdFlow" in Sent.last()
-    assert "Which describes you" in Sent.last()
-    assert "role:adv" in Sent.buttons()
-    assert "role:pub" in Sent.buttons()
-    assert "role:ins" in Sent.buttons()
-
-
-async def test_start_goes_straight_to_the_panel_once_you_have_used_it(client, actor, state):
-    """The question is answered by having connected an account; asking again
-    every time would put a question in front of the thing they came for."""
-    await connect_bot(actor)
-    await handlers.start(a_message("/start"), user_id=uuid.UUID(actor.id), state=state)
-
-    assert "Which describes you" not in Sent.last()
     assert "nav:ads:0" in Sent.buttons()
     assert "nav:autoreply" in Sent.buttons()
-
-
-async def test_choosing_advertiser_opens_the_panel(client, actor, state):
-    await handlers.start(a_message("/start"), user_id=uuid.UUID(actor.id), state=state)
-    await handlers.choose_role(a_callback("role:adv"), user_id=uuid.UUID(actor.id))
-
-    assert "nav:ads:0" in Sent.buttons()
+    assert "role:adv" not in Sent.buttons(), "the roles question is gone"
 
 
 async def test_every_navigation_screen_renders(client, actor, state):
@@ -1064,8 +1044,6 @@ def _every_callback() -> set[str]:
     connection = a_connection("active")
 
     screens = [
-        views.roles(links=[("Support", "https://t.me/x")]),
-        views.publisher_waitlist(joined=False),
         views.about(),
         views.home(connections=[connection], rules=[rule], broadcasts=[broadcast], counts={}),
         views.home(

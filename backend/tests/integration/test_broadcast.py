@@ -1257,3 +1257,106 @@ async def test_each_repeat_round_reports_once(client, actor, session):
     )
     assert len(alerts) == 1
     assert "round 1" in alerts[0].title
+
+
+# --------------------------------------------------------------------------- #
+# Deleting an ad
+# --------------------------------------------------------------------------- #
+async def test_a_finished_ad_can_be_deleted(client, actor, state, session):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import Sent, a_callback
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+    assert broadcast.status is BroadcastStatus.completed
+
+    await handlers.ad_actions(
+        a_callback(f"ad:{broadcast.id}:askdel"), user_id=uuid.UUID(actor.id), state=state
+    )
+    assert "Delete" in Sent.last()
+    assert "cannot unsend" in Sent.last(), "and it is honest about what deleting does not do"
+
+    await handlers.ad_actions(
+        a_callback(f"ad:{broadcast.id}:del"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    session.expire_all()
+    assert await session.get(Broadcast, ctx["broadcast_id"]) is None
+    remaining = (
+        (
+            await session.execute(
+                select(BroadcastTarget).where(BroadcastTarget.broadcast_id == ctx["broadcast_id"])
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == [], "its target rows go with it"
+
+
+async def test_a_running_ad_cannot_be_deleted(client, actor, state, session):
+    """Deleting mid-flight would drop rows the worker holds leases on."""
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import Sent, a_callback
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await handlers.ad_actions(
+        a_callback(f"ad:{broadcast.id}:del"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    session.expire_all()
+    assert await session.get(Broadcast, ctx["broadcast_id"]) is not None
+    assert any("Stop it first" in alert for alert in Sent.alerts)
+
+
+async def test_the_delete_button_only_appears_when_it_is_allowed(client, actor, session):
+    from app.adminbot import views
+
+    ctx = await build_broadcast(actor, session, groups=1)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+
+    running = views.ad_detail(
+        broadcast=await _with_status(session, broadcast, BroadcastStatus.sending),
+        counts={},
+        target_count=1,
+    )
+    stopped = views.ad_detail(
+        broadcast=await _with_status(session, broadcast, BroadcastStatus.cancelled),
+        counts={},
+        target_count=1,
+    )
+
+    def callbacks(screen):
+        return [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+
+    assert any(c.endswith(":cancel") for c in callbacks(running))
+    assert not any(c.endswith(":askdel") for c in callbacks(running))
+    assert any(c.endswith(":askdel") for c in callbacks(stopped))
+
+
+async def _with_status(session, broadcast, status):
+    broadcast.status = status
+    return broadcast
+
+
+async def test_another_account_cannot_delete_your_ad(client, actor, other_actor, state, session):
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback
+
+    ctx = await build_broadcast(actor, session, groups=1)
+    await handlers.ad_actions(
+        a_callback(f"ad:{ctx['broadcast_id']}:del"),
+        user_id=uuid.UUID(other_actor.id),
+        state=state,
+    )
+
+    session.expire_all()
+    assert await session.get(Broadcast, ctx["broadcast_id"]) is not None
