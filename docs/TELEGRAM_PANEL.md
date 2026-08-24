@@ -527,10 +527,6 @@ beats the default in both directions, so "everyone except this one" and "nobody
 except this one" are both one tap. **↩️ Follow the default** puts it back to
 whatever the switch says.
 
-Users are told this: the terms screen, which everyone accepts before they can
-send anything, states that the operator keeps a copy of the ads sent through
-the bot. Their private messages are not read — only ads posted with it.
-
 Operator access itself is *not* granted from the panel. It stays in
 `ADMIN_TELEGRAM_IDS` on the server, because on an open deployment anyone gets
 an account just by messaging the bot.

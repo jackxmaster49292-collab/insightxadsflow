@@ -11,8 +11,9 @@ It answers four questions in order, and each has a different failure:
    In ``open`` mode anyone is, which is a deliberate deployment choice.
 2. **Are they suspended?** They are told, with the reason, rather than being
    silently ignored.
-3. **Have they accepted the terms?** Until they do, the only screen that
-   resolves is the terms screen — and the accept button itself, or the gate
+3. ~~Terms~~ — there is no terms gate. It was removed at the operator's
+   request; the warnings that earned their place moved to the screens where
+   they apply, which is where anyone would look for them anyway.
    would be impossible to pass.
 4. **Are they flooding the bot?** An open bot is reachable by anyone, so a
    per-person throttle keeps one client from occupying the panel.
@@ -45,9 +46,6 @@ DENIED_TEXT = (
 
 THROTTLED_TEXT = "You are sending requests too quickly. Wait a moment and try again."
 
-#: Callbacks that must work before the terms are accepted, or the gate could
-#: never be passed.
-TERMS_EXEMPT = frozenset({"terms:accept", "terms:show"})
 
 #: Rate-limit bucket for bot updates. Generous — this is protection against a
 #: stuck client or a script, not a restriction on ordinary use. Tapping through
@@ -117,41 +115,8 @@ class AccessMiddleware(BaseMiddleware):
             data["user_id"] = user.id
             data["user_email"] = user.email
             data["is_operator"] = is_operator
-            data["terms_accepted"] = user.terms_accepted_at is not None
-
-        # --- 4. terms ------------------------------------------------------
-        # Enforced here rather than in each handler, for the same reason the
-        # access check is: a handler can forget, and forgetting once would let
-        # someone use the tool without ever seeing what they are responsible
-        # for. The accept button is exempt, or the gate could never be passed.
-        if not data["terms_accepted"] and not _is_terms_step(event):
-            await _show_terms(event)
-            return None
 
         return await handler(event, data)
-
-
-def _is_terms_step(event: TelegramObject) -> bool:
-    """Is this the accept button, or /start showing the terms?"""
-    if isinstance(event, CallbackQuery):
-        return (event.data or "") in TERMS_EXEMPT
-    return False
-
-
-async def _show_terms(event: TelegramObject) -> None:
-    """Send the terms screen instead of whatever was asked for."""
-    # Imported here rather than at module scope: views imports the ORM models,
-    # and a top-level import would make this middleware part of that cycle.
-    from app.adminbot.views import terms
-
-    screen = terms()
-    if isinstance(event, CallbackQuery):
-        await event.answer()
-        message = event.message
-        if isinstance(message, Message):
-            await message.answer(screen.text, reply_markup=screen.keyboard, parse_mode="MarkdownV2")
-    elif isinstance(event, Message):
-        await event.answer(screen.text, reply_markup=screen.keyboard, parse_mode="MarkdownV2")
 
 
 async def _reply(event: TelegramObject, text: str, *, alert: bool = True) -> None:

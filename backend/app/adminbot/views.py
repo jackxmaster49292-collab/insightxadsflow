@@ -113,60 +113,6 @@ def _page_of(items: Sequence, page: int, size: int) -> tuple[Sequence, int, int]
     return items[page * size : (page + 1) * size], page, pages
 
 
-# --------------------------------------------------------------------------- #
-# Terms
-# --------------------------------------------------------------------------- #
-def terms() -> Screen:
-    """What a new account sees, and the only screen it sees until it accepts.
-
-    Written as a plain statement of what the tool does and where the
-    responsibility sits, not as legal cover. The honest points are the ones
-    people actually need: this posts from *your* Telegram account, Telegram can
-    restrict that account, and nothing here will help you get around it.
-    """
-    return Screen(
-        "\n".join(
-            [
-                "📡 *InsightAdFlow*",
-                "",
-                "Post your own message to Telegram groups you have already "
-                "joined, and answer people who message you first\\.",
-                "",
-                "*Before you start, the honest version:*",
-                "",
-                "• It posts from *your* Telegram account, to groups *you* have "
-                "already joined\\. It never joins a group for you and never reads "
-                "a member list\\.",
-                "",
-                "• *Telegram can restrict or ban your account* if people report "
-                "your messages as spam\\. That risk is yours, and this tool will "
-                "not help you get around it — it obeys every rate limit and wait "
-                "Telegram asks for\\.",
-                "",
-                "• Auto\\-reply only ever answers someone who messaged you "
-                "first\\. There is no way to message people who did not\\.",
-                "",
-                "• You are responsible for what you send\\. The operator of this "
-                "bot can suspend your access\\.",
-                "",
-                "• *The operator keeps a copy of the ads you send through this "
-                "bot*, along with the list of groups each one went to\\. Your "
-                "private messages are never read — only the ads you post with "
-                "it\\.",
-                "",
-                "• Your bot token, phone number and login code are typed into "
-                "this chat\\. Each message is deleted the moment it is read, but "
-                "Telegram's servers held it for a moment\\.",
-                "",
-                "Tap below if that is all fine\\.",
-            ]
-        ),
-        _rows(
-            [InlineKeyboardButton(text="✅ I understand, continue", callback_data="terms:accept")],
-        ),
-    )
-
-
 def _link_row(links: Sequence[tuple[str, str]]) -> list[InlineKeyboardButton]:
     """URL buttons for the configured links, two to a row's worth of width.
 
@@ -583,8 +529,6 @@ def user_detail(  # type: ignore[no-untyped-def]
     ]
     if not user.is_active and user.suspended_reason:
         lines.append(f"*Reason* — {escape(user.suspended_reason)}")
-    if user.terms_accepted_at is None:
-        lines.append("*Terms* — not accepted yet")
     archived = user.archive_ads if user.archive_ads is not None else archive_default_on
     following = "" if user.archive_ads is not None else " \\(the default\\)"
     lines.append(f"*Ads copied to your archive* — {'yes' if archived else 'no'}{following}")
@@ -1169,7 +1113,13 @@ def ad_confirm(
         promise = (
             "It posts only to groups this account has already joined\\. "
             "You can pause it once it starts, but messages already posted cannot "
-            "be unsent\\."
+            "be unsent\\.\n\n"
+            # The one warning the removed terms screen carried that lives
+            # nowhere else, moved to the moment it applies rather than dropped
+            # with the screen: Telegram acts on the *posting* account, and this
+            # is the tap that starts the posting.
+            "_Telegram can restrict an account that people report as spam\\. "
+            "That account is yours\\._"
         )
     return Screen(
         f"{header}\n\n_{body}_\n\n"

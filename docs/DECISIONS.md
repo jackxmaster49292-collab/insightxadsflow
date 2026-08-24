@@ -1013,6 +1013,26 @@ is the intent; the ordering makes the last decision the live one. This is right
 because operators are trusted by definition here — the same trust that already
 lets them suspend accounts.
 
+### ADR-071 — The terms gate is removed; its one unique warning moved
+**Context.** ADR-030 put a terms screen in front of every new account. The
+operator asked for it gone — they wanted the bot to feel like a normal bot, and
+they are its only user today. This also withdraws ADR-070's disclosure, which
+lived on that screen.
+**Decision.** The screen, the accept callback, the middleware gate and
+``users.terms_accepted_at`` are all removed rather than left disabled. Of the
+warnings the screen carried, only one lived nowhere else — that Telegram can
+restrict an account people report as spam — and it moved to the confirmation
+before an ad is sent, which is the moment it applies and where anyone would
+look for it. The credentials warning was already on the sign-in screens; the
+never-joins-groups and auto-reply-cannot-initiate properties are enforced in
+code and guard-tested, not merely promised in prose.
+**Consequence.** Nothing now tells a *future* third-party user that their ads
+are copied to the operator's archive. That is a live gap the moment this
+deployment has users other than its owner, and the honest place to close it
+would be a line on the About screen or a note when an account is switched on
+for archiving — not a gate. Flagged rather than silently accepted, because the
+setting defaults to copying everyone.
+
 ---
 
 ## Open tradeoffs

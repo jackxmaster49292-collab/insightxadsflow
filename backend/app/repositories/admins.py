@@ -28,8 +28,7 @@ async def upsert_user(
 
     Called only after the middleware has decided the caller may be here. This
     function authorizes nothing on its own — creating a row is not permission,
-    which is why a new account starts with no accepted terms and can see only
-    the terms screen.
+    which is why a new account starts suspended-capable but otherwise plain.
     """
     user = await get_by_telegram_id(session, telegram_user_id)
     if user is not None:

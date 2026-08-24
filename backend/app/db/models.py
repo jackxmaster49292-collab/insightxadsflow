@@ -179,9 +179,6 @@ class User(Base, TimestampMixin):
     #: Nullable so password accounts keep working unchanged.
     telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     telegram_username: Mapped[str | None] = mapped_column(String(64))
-    #: When this person accepted the terms. NULL means they have not, and the
-    #: panel shows them nothing but the terms screen until they do.
-    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: Bumped on every broadcast queued. The one number an operator needs to
     #: spot an account behaving unlike the others, without reading its content.
     broadcasts_sent: Mapped[int] = mapped_column(

@@ -1064,7 +1064,6 @@ def _every_callback() -> set[str]:
     connection = a_connection("active")
 
     screens = [
-        views.terms(),
         views.roles(links=[("Support", "https://t.me/x")]),
         views.publisher_waitlist(joined=False),
         views.about(),

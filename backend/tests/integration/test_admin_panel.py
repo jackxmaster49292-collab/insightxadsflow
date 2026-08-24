@@ -92,24 +92,18 @@ def a_callback() -> CapturingCallback:
     )
 
 
-async def accept_terms_for(telegram_id: int) -> None:
-    """Mark this Telegram identity as having accepted, so a test about the
-    allowlist is not really a test about the terms gate."""
+async def register(telegram_id: int) -> None:
+    """Give this Telegram id an account. There is no gate left to pass."""
     from app.db.session import session_scope
-    from app.repositories import admins as admin_repo
-    from app.services import users as user_service
 
     async with session_scope() as session:
-        user = await admin_repo.upsert_user(
-            session, telegram_user_id=telegram_id, username="operator"
-        )
-        await user_service.accept_terms(session, user=user)
+        await admin_repo.upsert_user(session, telegram_user_id=telegram_id, username="operator")
 
 
 async def run_middleware(event: object, telegram_id: int, *, accepted: bool = True) -> dict:
     """Push one update through the guard and report what the handler received."""
     if accepted:
-        await accept_terms_for(telegram_id)
+        await register(telegram_id)
 
     seen: dict = {}
 
@@ -358,7 +352,6 @@ def test_every_button_the_screens_emit_fits_the_limit():
         views.home(
             connections=[connection], rules=[], broadcasts=[broadcast], counts={}, is_operator=True
         ),
-        views.terms(),
         views.connections_list(connections=[connection]),
         views.connection_detail(connection=connection, chat_count=3),
         views.confirm_disconnect(connection=connection),

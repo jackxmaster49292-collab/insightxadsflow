@@ -561,28 +561,6 @@ async def panel(
     await _go_home(message, user_id, is_operator=is_operator)
 
 
-@router.callback_query(F.data == "terms:accept")
-async def accept_terms(
-    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
-) -> None:
-    async with session_scope() as session:
-        user = await user_repo.get_by_id(session, user_id)
-        if user is None:
-            await query.answer("Send /start to begin.", show_alert=True)
-            return
-        await user_service.accept_terms(session, user=user)
-        await event_repo.audit(
-            session,
-            user_id=user_id,
-            action="user.accept_terms",
-            object_type="user",
-            object_id=str(user_id),
-        )
-
-    await _render(query, await _home_screen(user_id, is_operator=is_operator))
-    await query.answer("Welcome.")
-
-
 @router.message(Command("cancel"))
 async def cancel_flow(
     message: Message,

@@ -1,9 +1,8 @@
-"""Open access: who gets in, what they must accept, and how they are stopped.
+"""Open access: who gets in, and how they are stopped.
 
 With ``ACCESS_MODE=open`` anyone on Telegram can reach this bot, so the
 properties tested here are the ones the allowlist used to provide for free:
 
-* a new arrival sees the terms and nothing else until they accept;
 * one account cannot see or touch another's ads, rules or connections;
 * an operator can suspend an account, and suspension stops work already queued
   rather than only new work;
@@ -161,12 +160,11 @@ async def through_gate(event: object, telegram_id: int) -> dict:
 
 
 async def onboard(telegram_id: int) -> uuid.UUID:
-    """A person who has arrived and accepted the terms."""
+    """A person who has arrived. There is no gate left to pass."""
     async with session_scope() as session:
         user = await admin_repo.upsert_user(
             session, telegram_user_id=telegram_id, username=f"u{telegram_id}"
         )
-        await user_service.accept_terms(session, user=user)
         return user.id
 
 
@@ -175,10 +173,8 @@ async def onboard(telegram_id: int) -> uuid.UUID:
 # --------------------------------------------------------------------------- #
 async def test_a_stranger_is_let_in_when_access_is_open(client):
     result = await through_gate(a_message(STRANGER_ID, "/start"), STRANGER_ID)
-    # The handler is not reached yet — the terms come first — but an account
-    # exists and no rejection happened.
-    assert result["_result"] is None
-    assert "InsightAdFlow" in Sent.text()
+    assert result["_result"] == "handled", "no gate stands between arriving and the panel"
+    assert result["user_id"] is not None, "and an account exists for them"
 
 
 async def test_the_same_stranger_is_refused_when_access_is_closed(client, monkeypatch):
@@ -194,63 +190,6 @@ async def test_an_operator_gets_in_either_way(client, monkeypatch):
     result = await through_gate(a_message(OPERATOR_ID, "/start"), OPERATOR_ID)
     assert result["_result"] == "handled"
     assert result["is_operator"] is True
-
-
-# --------------------------------------------------------------------------- #
-# The terms gate
-# --------------------------------------------------------------------------- #
-async def test_a_new_arrival_sees_the_terms_and_nothing_else(client):
-    result = await through_gate(a_message(STRANGER_ID, "/start"), STRANGER_ID)
-
-    assert result["_result"] is None, "the handler must not run before the terms are accepted"
-    assert "Telegram can restrict or ban your account" in Sent.text()
-    assert "terms:accept" in Sent.buttons()
-
-
-async def test_the_terms_gate_holds_for_buttons_too(client):
-    """Not just /start: any callback from someone who has not accepted must be
-    turned into the terms screen."""
-    await through_gate(a_callback(STRANGER_ID, "nav:ads:0"), STRANGER_ID)
-    assert "terms:accept" in Sent.buttons()
-
-
-async def test_the_accept_button_itself_is_not_blocked(client):
-    """The one exemption, without which the gate could never be passed."""
-    result = await through_gate(a_callback(STRANGER_ID, "terms:accept"), STRANGER_ID)
-    assert result["_result"] == "handled"
-
-
-async def test_accepting_unlocks_the_panel(client, session):
-    await through_gate(a_message(STRANGER_ID, "/start"), STRANGER_ID)
-    user_id = (
-        (await session.execute(select(User).where(User.telegram_user_id == STRANGER_ID)))
-        .scalar_one()
-        .id
-    )
-
-    Sent.reset()
-    await handlers.accept_terms(a_callback(STRANGER_ID, "terms:accept"), user_id=user_id)
-    assert "nav:ads:0" in Sent.buttons()
-
-    session.expire_all()
-    user = await session.get(User, user_id)
-    assert user.terms_accepted_at is not None
-
-    Sent.reset()
-    result = await through_gate(a_message(STRANGER_ID, "/start"), STRANGER_ID)
-    assert result["_result"] == "handled"
-
-
-async def test_the_terms_say_the_things_that_actually_matter(client):
-    """These are the sentences someone is agreeing to; they should not quietly
-    disappear in a later edit."""
-    text = views.terms().text
-    assert "already joined" in text
-    assert "never joins a group for you" in text
-    assert "restrict or ban your account" in text
-    assert "will not help you get around it" in text
-    assert "answers someone who messaged you first" in text
-    assert "deleted the moment it is read" in text
 
 
 # --------------------------------------------------------------------------- #

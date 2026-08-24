@@ -1,4 +1,4 @@
-"""Account lifecycle: accepting the terms, suspension, reinstatement.
+"""Account lifecycle: suspension and reinstatement.
 
 Suspension has to be more than a flag. Work is already queued when an operator
 decides to stop someone — rules are active, a broadcast is halfway through a
@@ -35,11 +35,6 @@ log = structlog.get_logger(__name__)
 
 #: What a suspended person is told when no reason was given.
 DEFAULT_REASON = "Suspended by the operator."
-
-
-async def accept_terms(session: AsyncSession, *, user: User) -> None:
-    if user.terms_accepted_at is None:
-        user.terms_accepted_at = datetime.now(UTC)
 
 
 async def suspend(
