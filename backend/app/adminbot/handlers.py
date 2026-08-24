@@ -559,6 +559,50 @@ async def nav_connections(query: CallbackQuery, user_id: uuid.UUID, **_extra: An
     await query.answer()
 
 
+async def _fill_page_details(session, user_id: uuid.UUID, chats) -> None:  # type: ignore[no-untyped-def]
+    """Learn the bio of the private chats about to be shown, and only those.
+
+    Bounded to one page on purpose. Fetching all 237 would take two minutes and
+    hammer Telegram's most rate-limited lookup for chats nobody is looking at;
+    a page is six, costs three seconds once, and is cached from then on.
+
+    Public chats are skipped — Telegram unfurls their links itself, so there is
+    nothing here they need.
+    """
+    import asyncio
+
+    from app.db.models import ConnectionKind, ConnectionStatus
+    from app.services import connections as connection_service
+
+    wanted = [
+        c
+        for c in chats
+        if not c.username and c.details_synced_at is None and c.chat_kind.value != "private"
+    ]
+    if not wanted:
+        return
+
+    connections = await connection_repo.list_for_user(session, user_id=user_id)
+    live = [
+        c
+        for c in connections
+        if c.kind is ConnectionKind.user and c.status is ConnectionStatus.active
+    ]
+    if not live:
+        return
+    adapter = await connection_service.adapter_for(session, live[0])
+
+    for chat in wanted:
+        try:
+            details = await adapter.chat_details(chat_repo.to_ref(chat))
+        except Exception as exc:
+            # One unreadable chat must not cost the page its other five.
+            log.warning("chat_details_failed", chat_id=str(chat.id), error=str(exc))
+            continue
+        await chat_repo.set_details(session, chat=chat, details=details)
+        await asyncio.sleep(0.5)
+
+
 async def _dead_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
     async with session_scope() as session:
         refusing = await chat_repo.refusing(session, user_id=user_id)
@@ -2380,6 +2424,9 @@ async def user_actions(
             if len(parts) > 3 and parts[3].isdigit():
                 page = int(parts[3])
             chats = await chat_repo.list_filtered(session, user_id=target.id, limit=2000)
+            await _fill_page_details(
+                session, target.id, views.page_of_chats(chats=chats, page=page, kind=kind)
+            )
             await _render(query, views.user_groups(user=target, chats=chats, page=page, kind=kind))
             await query.answer()
             return

@@ -1186,6 +1186,21 @@ every account's ad content to the operator's own group, and the same judgement
 applies: on a single-owner deployment it costs nothing, and on a shared one it
 is one of the things that would need saying.
 
+### ADR-083 — A members-only chat carries its bio; a public one does not
+**Context.** On the operator's view of an account's chats, a public link
+unfurls by itself — Telegram shows the title, the description and a Join button
+under it. A ``t.me/c/`` link shows nothing, so a private group was a title and
+a number with nothing to recognise it by.
+**Decision.** Private chats show their description (clipped to 120) and member
+count under the link. Public ones show neither, because Telegram is already
+saying it and repeating it would be noise.
+**Consequence.** Details are learned for **the page being viewed and no other**
+— six chats, about three seconds, cached from then on. Fetching all 237 would
+take two minutes of Telegram's most rate-limited lookup for chats nobody is
+looking at. ``page_of_chats`` is shared between the fetch and the render so the
+two cannot disagree about which six; a second implementation would drift and
+quietly fetch the wrong ones.
+
 ---
 
 ## Open tradeoffs

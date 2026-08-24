@@ -580,6 +580,14 @@ public chat, `t.me/c/…` for a private one (which opens for members), and
 nothing for a basic group, which the screen says rather than leaving blank.
 Buttons switch between all, groups only and channels only.
 
+A **members-only** link shows no preview, so those chats carry their
+description and member count underneath — which is the only way to recognise a
+private group from a list. Public links are left alone: Telegram unfurls them
+itself, with the title and description already in the preview.
+
+Those details are looked up for the page you are on, once, and remembered. The
+first time a page opens it may take a couple of seconds.
+
 Private conversations are not listed. They are synchronized, but they are not
 what this screen is for.
 

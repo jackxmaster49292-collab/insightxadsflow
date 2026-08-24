@@ -494,6 +494,24 @@ def user_detail(  # type: ignore[no-untyped-def]
     )
 
 
+def page_of_chats(*, chats, page: int, kind: str = "all"):  # type: ignore[no-untyped-def]
+    """Exactly the chats ``user_groups`` will render for this page.
+
+    Shared so the handler can fetch details for what is about to be shown and
+    nothing else — a second implementation of "which six" would drift and
+    quietly fetch the wrong ones.
+    """
+    groups = [c for c in chats if c.chat_kind.value in ("group", "supergroup")]
+    channels = [c for c in chats if c.chat_kind.value == "channel"]
+    shown = channels if kind == "channels" else groups if kind == "groups" else groups + channels
+    window, _page, _pages = _page_of(shown, page, PAGE_SIZE)
+    return list(window)
+
+
+#: How much of a description this screen carries. Shorter than the archive's,
+#: because six of these share one message with their links and titles.
+_CHAT_BIO_CHARS = 120
+
 #: Which callback verb pages each view of this screen.
 _KIND_VERB = {"all": "groups", "groups": "gall", "channels": "gchan"}
 
@@ -548,11 +566,26 @@ def user_groups(  # type: ignore[no-untyped-def]
             chat_kind=chat.chat_kind.value, peer_id=chat.peer_id, username=chat.username
         )
         if link.url and link.kind is LinkKind.public:
+            # Telegram unfurls a public link by itself — title, description and
+            # a Join button — so anything added here would be said twice.
             lines.append(f"   {escape(link.url)}")
-        elif link.url:
+            continue
+
+        if link.url:
             lines.append(f"   {escape(link.url)} \\(members only\\)")
         else:
             lines.append("   _no link — Telegram publishes none for this kind of chat_")
+
+        # A t.me/c link shows no preview at all, so without this a private
+        # group is a title and a number and nothing to recognise it by.
+        facts = []
+        if getattr(chat, "description", None):
+            bio = " ".join(chat.description.split())
+            facts.append(bio[:_CHAT_BIO_CHARS] + ("…" if len(bio) > _CHAT_BIO_CHARS else ""))
+        if getattr(chat, "member_count", None):
+            facts.append(f"{chat.member_count:,} members")
+        if facts:
+            lines.append(f"   _{escape(' · '.join(facts))}_")
 
     verb = {"channels": "ggrp", "groups": "gall"}.get(kind, "gchan")
     label = {"channels": "💭 Groups only", "groups": "💭 All"}.get(kind, "📢 Channels only")

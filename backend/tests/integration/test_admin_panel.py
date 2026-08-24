@@ -705,3 +705,106 @@ def test_the_groups_screen_says_so_when_nothing_is_synced():
     screen = views.user_groups(user=user, chats=[], page=0)
     assert "Nothing synced" in screen.text
     assert_valid_markdown_v2(screen.text)
+
+
+async def test_a_members_only_chat_carries_its_bio_and_size(client, actor, session):
+    """A t.me/c link shows no preview at all, so without this a private group
+    is a title and a number with nothing to recognise it by. A public one is
+    skipped — Telegram unfurls that link itself."""
+    from types import SimpleNamespace
+
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    def chat(title, kind, peer, username=None, description=None, members=None):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            title=title,
+            chat_kind=SimpleNamespace(value=kind),
+            peer_id=peer,
+            username=username,
+            description=description,
+            member_count=members,
+            access=SimpleNamespace(can_post_destination=True),
+        )
+
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    screen = views.user_groups(
+        user=user,
+        chats=[
+            chat(
+                "Bugs",
+                "supergroup",
+                -1002292984243,
+                description="Deals and offers, posted daily",
+                members=12_400,
+            ),
+            chat(
+                "Big Budget Market",
+                "supergroup",
+                -1002001,
+                username="bigbudgetmarket",
+                description="Big Budget Clients & Agencies Are Welcome",
+                members=9_000,
+            ),
+        ],
+        page=0,
+    )
+
+    assert "Deals and offers, posted daily" in screen.text
+    assert "12,400 members" in screen.text
+    assert "Big Budget Clients" not in screen.text, "a public link previews itself"
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_a_long_bio_is_clipped_on_this_screen():
+    """Six of these share one message with their links and titles."""
+    from types import SimpleNamespace
+
+    from app.adminbot.views import _CHAT_BIO_CHARS
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    chat = SimpleNamespace(
+        id=uuid.uuid4(),
+        title="Chatty",
+        chat_kind=SimpleNamespace(value="supergroup"),
+        peer_id=-1002001,
+        username=None,
+        description="word " * 200,
+        member_count=5,
+        access=SimpleNamespace(can_post_destination=True),
+    )
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    screen = views.user_groups(user=user, chats=[chat], page=0)
+
+    bio_line = next(line for line in screen.text.splitlines() if "word" in line)
+    assert len(bio_line) < _CHAT_BIO_CHARS + 40
+    assert "…" in bio_line
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_the_page_helper_matches_what_the_screen_renders():
+    """The handler fetches details for exactly the chats about to be shown; a
+    second implementation of "which six" would drift and fetch the wrong ones."""
+    from types import SimpleNamespace
+
+    def chat(i, kind):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            title=f"{kind} {i:02d}",
+            chat_kind=SimpleNamespace(value=kind),
+            peer_id=-1002000 - i,
+            username=None,
+            description=None,
+            member_count=None,
+            access=SimpleNamespace(can_post_destination=True),
+        )
+
+    chats = [chat(i, "supergroup") for i in range(10)] + [chat(i, "channel") for i in range(4)]
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+
+    for kind in ("all", "groups", "channels"):
+        for page in (0, 1):
+            visible = views.page_of_chats(chats=chats, page=page, kind=kind)
+            rendered = views.user_groups(user=user, chats=chats, page=page, kind=kind).text
+            for c in visible:
+                assert c.title in rendered, f"{kind} page {page} missing {c.title}"
