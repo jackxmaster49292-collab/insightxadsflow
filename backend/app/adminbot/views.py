@@ -1396,7 +1396,79 @@ def autoreply_screen(*, connection: TelegramConnection | None, reply: AutoReply 
 # --------------------------------------------------------------------------- #
 # Groups and activity
 # --------------------------------------------------------------------------- #
-def chats_list(*, chats: Sequence, page: int, other_count: int = 0) -> Screen:  # type: ignore[type-arg]
+def dead_groups(
+    *,
+    chats: Sequence,  # type: ignore[type-arg]
+    page: int,
+    temporary: frozenset[str],
+) -> Screen:
+    """Groups that will not accept a post, and the choice of what to do.
+
+    Nothing here happens on its own. An automatic prune would eventually throw
+    a group away over a wait that had already cleared, and the customer would
+    have no way of knowing it had gone.
+    """
+    if not chats:
+        return Screen(
+            "🧹 *Groups refusing posts*\n\nNone — every group you have chosen accepts your ads\\.",
+            _rows(_back("nav:chats:0"), _home_row()),
+        )
+
+    def code_of(chat: object) -> str:
+        access = getattr(chat, "access", None)
+        return access.destination_reason_code if access else "unknown"
+
+    lasting = [c for c in chats if code_of(c) not in temporary]
+
+    lines = [
+        f"🧹 *Groups refusing posts* \\({len(chats)}\\)",
+        "",
+        "Every round tries these again and is turned away again\\. Removing them "
+        "makes each round faster, and stops your account knocking on doors that "
+        "are shut\\.",
+        "",
+        "*Removing does not leave the group\\.* You stay a member; your ads just "
+        "stop addressing it, and you can pick it again any time\\.",
+        "",
+    ]
+
+    window, page, pages = _page_of(chats, page, PAGE_SIZE)
+    rows = []
+    for chat in window:
+        code = code_of(chat)
+        passing = code in temporary
+        lines.append(f"{'⏳' if passing else '❌'} *{escape(chat.title[:40])}*")
+        lines.append(f"   _{escape(reasons.describe(code))}_")
+        if passing:
+            lines.append("   _This one may clear by itself\\._")
+        rows.append(
+            [InlineKeyboardButton(text=f"🗑 {chat.title[:34]}", callback_data=f"dead:one:{chat.id}")]
+        )
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *rows,
+            _pager("nav:dead:", page, pages),
+            [
+                InlineKeyboardButton(
+                    text=f"🗑 Remove all {len(lasting)} shut ones", callback_data="dead:all"
+                )
+            ]
+            if lasting
+            else [],
+            _back("nav:chats:0"),
+        ),
+    )
+
+
+def chats_list(
+    *,
+    chats: Sequence,  # type: ignore[type-arg]
+    page: int,
+    other_count: int = 0,
+    refusing_count: int = 0,
+) -> Screen:
     if not chats:
         return Screen(
             "💭 *Groups*\n\nNone yet\\.\n\n"
@@ -1425,7 +1497,17 @@ def chats_list(*, chats: Sequence, page: int, other_count: int = 0) -> Screen:  
 
     return Screen(
         "\n".join(lines),
-        InlineKeyboardMarkup(inline_keyboard=[_pager("nav:chats:", page, pages), _home_row()]),
+        _rows(
+            [
+                InlineKeyboardButton(
+                    text=f"🧹 Refusing posts ({refusing_count})", callback_data="nav:dead:0"
+                )
+            ]
+            if refusing_count
+            else [],
+            _pager("nav:chats:", page, pages),
+            _home_row(),
+        ),
     )
 
 

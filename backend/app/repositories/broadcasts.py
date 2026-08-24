@@ -166,6 +166,35 @@ async def replace_targets(
     return len(wanted)
 
 
+async def drop_chats(
+    session: AsyncSession, *, user_id: uuid.UUID, chat_ids: Sequence[uuid.UUID]
+) -> int:
+    """Take these groups out of every ad this account owns.
+
+    Only rows that never succeeded are removed. A group that once received the
+    ad and later broke keeps that row, because the archive index is built from
+    successful deliveries and deleting them would erase a record of something
+    that genuinely happened.
+
+    It does not leave the group — nothing here ever does. The account stays a
+    member; the ads simply stop addressing it.
+    """
+    if not chat_ids:
+        return 0
+    result = await session.execute(
+        delete(BroadcastTarget)
+        .where(
+            BroadcastTarget.chat_id.in_(chat_ids),
+            BroadcastTarget.status != JobStatus.succeeded,
+            BroadcastTarget.broadcast_id.in_(
+                select(Broadcast.id).where(Broadcast.user_id == user_id)
+            ),
+        )
+        .returning(BroadcastTarget.id)
+    )
+    return len(result.all())
+
+
 async def targets_with_chats(
     session: AsyncSession, *, broadcast_id: uuid.UUID
 ) -> list[tuple[BroadcastTarget, TelegramChat]]:

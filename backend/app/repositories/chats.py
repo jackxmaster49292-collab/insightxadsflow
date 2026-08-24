@@ -146,6 +146,35 @@ def to_ref(chat: TelegramChat) -> ChatRef:
     )
 
 
+#: Refusals that are a *fact about now*, not about the group. A slow-mode wait
+#: or a flood wait clears by itself, and offering to remove a group over one
+#: would throw away a perfectly good group for a temporary condition.
+TEMPORARY_REFUSALS: frozenset[str] = frozenset(
+    {"slowmode_wait", "flood_wait", "unknown", "destination_not_eligible"}
+)
+
+
+async def refusing(session: AsyncSession, *, user_id: uuid.UUID) -> list[TelegramChat]:
+    """Groups the account currently cannot post in, with the reason attached.
+
+    Read from the stored eligibility snapshot, which every delivery attempt
+    updates — so this is what Telegram said the last time it was asked, not a
+    guess from counting failures.
+    """
+    result = await session.execute(
+        _owned(user_id)
+        .join(ConnectionChatAccess, ConnectionChatAccess.chat_id == TelegramChat.id)
+        .where(
+            TelegramChat.is_active.is_(True),
+            TelegramChat.chat_kind.in_([ChatKind.group, ChatKind.supergroup]),
+            ConnectionChatAccess.can_post_destination.is_(False),
+        )
+        .options(selectinload(TelegramChat.access))
+        .order_by(TelegramChat.title)
+    )
+    return list(result.scalars().all())
+
+
 async def set_details(session: AsyncSession, *, chat: TelegramChat, details) -> None:  # type: ignore[no-untyped-def]
     """Record the chat's own description and size, with when we learned it."""
     from datetime import UTC, datetime

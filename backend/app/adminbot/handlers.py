@@ -559,10 +559,63 @@ async def nav_connections(query: CallbackQuery, user_id: uuid.UUID, **_extra: An
     await query.answer()
 
 
+async def _dead_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
+    async with session_scope() as session:
+        refusing = await chat_repo.refusing(session, user_id=user_id)
+    return views.dead_groups(chats=refusing, page=page, temporary=chat_repo.TEMPORARY_REFUSALS)
+
+
+@router.callback_query(F.data.startswith("nav:dead"))
+async def nav_dead_groups(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    await _render(query, await _dead_screen(user_id, page=_page_from(query.data or "")))
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("dead:"))
+async def drop_dead_groups(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    """Take refusing groups out of the ads. Never out of the group itself."""
+    parts = (query.data or "").split(":")
+    verb = parts[1] if len(parts) > 1 else ""
+
+    async with session_scope() as session:
+        refusing = await chat_repo.refusing(session, user_id=user_id)
+        if verb == "all":
+            # Only the lasting refusals. Sweeping up a slow-mode wait would
+            # remove a group that was going to work again in a minute.
+            chat_ids = [
+                c.id
+                for c in refusing
+                if (c.access.destination_reason_code if c.access else "unknown")
+                not in chat_repo.TEMPORARY_REFUSALS
+            ]
+        else:
+            wanted = views.as_uuid(parts[2] if len(parts) > 2 else None)
+            # Resolved against the refusing list, not taken on trust: an id
+            # alone must never reach another account's chat.
+            chat_ids = [c.id for c in refusing if c.id == wanted]
+
+        if not chat_ids:
+            await query.answer("Nothing to remove.", show_alert=True)
+            return
+
+        dropped = await broadcast_repo.drop_chats(session, user_id=user_id, chat_ids=chat_ids)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="ads.drop_groups",
+            object_type="telegram_chat",
+            payload={"groups": len(chat_ids), "targets_removed": dropped},
+        )
+
+    await _render(query, await _dead_screen(user_id, page=0))
+    await query.answer(f"Removed {len(chat_ids)} group(s) from your ads. You are still a member.")
+
+
 @router.callback_query(F.data.startswith("nav:chats"))
 async def nav_chats(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
     async with session_scope() as session:
         everything = await chat_repo.list_filtered(session, user_id=user_id, limit=1000)
+        refusing = await chat_repo.refusing(session, user_id=user_id)
     groups = [c for c in everything if c.chat_kind.value in AD_CHAT_KINDS]
     await _render(
         query,
@@ -570,6 +623,7 @@ async def nav_chats(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> 
             chats=groups,
             page=_page_from(query.data or ""),
             other_count=len(everything) - len(groups),
+            refusing_count=len(refusing),
         ),
     )
     await query.answer()

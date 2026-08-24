@@ -269,6 +269,26 @@ Pressing **Send** on a scheduled ad queues it rather than posting: the ad list
 shows it as 🕒 scheduled until its time comes. It is checked for problems when
 you press Send, not at six in the morning.
 
+### Clearing out groups that refuse you
+
+Under **💭 Groups**, a **🧹 Refusing posts** entry appears when any of your
+groups will not accept a post. It lists each one with the reason — not allowed
+to post, no longer a member, admins only, and so on.
+
+* Tap a group to take it out of your ads.
+* Or **🗑 Remove all** to drop every lasting refusal at once.
+
+Groups marked ⏳ are excluded from *Remove all* — a slow-mode or flood wait
+clears by itself, and removing a group over one would throw away a group that
+was about to work again. You can still remove those individually.
+
+**Removing does not leave the group.** The account stays a member; the ads stop
+addressing it, and you can pick it again from the group list whenever you like.
+Anything a group already received stays on the record.
+
+Nothing here is automatic, deliberately: only you can tell which refusals are
+worth waiting out.
+
 ### Speed
 
 **⚡ Speed** on the compose screen sets how fast a round works through the

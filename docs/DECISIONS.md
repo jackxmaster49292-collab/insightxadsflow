@@ -1141,6 +1141,29 @@ always correct regardless of what the stored zone says. An unparseable zone
 falls back to UTC rather than raising: a bad row should cost a wrong-looking
 time on a screen, not a dead scheduler.
 
+### ADR-080 — Groups that refuse posts are surfaced, never pruned automatically
+**Context.** A round of 156 groups delivered to 12. The other 144 were tried,
+refused and tried again on the next round — wasted time, and an account
+repeatedly knocking on doors that are shut. The eligibility snapshot already
+recorded which groups those were and why; nothing showed it in a usable form.
+**Decision.** 🧹 Refusing posts lists them with the reason for each. Removal is
+a decision the customer makes — one group at a time, or all the lasting ones at
+once. Nothing prunes itself: a refusal can be a fact about the group or a fact
+about this minute, and automation would eventually discard a good group over a
+wait that had already cleared, invisibly.
+**Consequence.** Temporary refusals — slow mode, a flood wait, an unknown code
+— are marked ⏳ and excluded from *Remove all*, though they can still be removed
+individually. "Remove" means removed from the ads, and the screen says so
+twice: the account stays a member and the group can be chosen again.
+
+### ADR-081 — Dropping a group keeps what it already received
+**Context.** Removing a group from ads could take its target rows with it,
+including rows recording a delivery that actually happened.
+**Decision.** ``drop_chats`` deletes only rows that never succeeded.
+**Consequence.** A group that worked for months and then shut its doors keeps
+the record of every ad it did receive, which is what the archive index is built
+from. Erasing that to tidy a list would be destroying evidence to save a row.
+
 ---
 
 ## Open tradeoffs
