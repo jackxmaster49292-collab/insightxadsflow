@@ -229,6 +229,13 @@ class AppSetting(Base):
     )
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
     notification_prefs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    #: A group of the customer's own where every posted ad is copied, so the
+    #: content survives the account that posted it. ``SET NULL`` rather than
+    #: cascade: losing the chat row must clear the setting, not delete the
+    #: customer's settings with it.
+    archive_chat_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("telegram_chats.id", ondelete="SET NULL")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

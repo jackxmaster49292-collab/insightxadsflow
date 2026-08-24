@@ -768,6 +768,40 @@ at a time, at the old pace.
 **Consequence.** The Bot API has neither call, so ``BotAdapter`` returns empty
 for both and says so. A partial map remains the normal outcome.
 
+### ADR-057 — The archive keeps the post, not a list of links
+**Context.** The operator asked for the links of their posts to arrive
+automatically in a group of their own, "in case my account is deleted, so at
+least I still have the old posts". That reason decides the design, because a
+list of links does not serve it: ``t.me/c/<id>/<msg>`` opens only for *members*
+of the group, so from a deleted account every one of those links is dead. Links
+to public groups survive; links to private ones do not.
+**Decision.** The archive posts **the ad itself** into a group the customer
+keeps — same text, same entities, so bold and premium emoji survive — and only
+then an index of where it went. The copy is the artifact that outlives the
+account; the index merely points at other people's groups. Each line states
+what its link is worth: a public ``t.me/<username>/<id>``, a private
+``t.me/c/…`` marked *members only*, or, for a basic group, that Telegram
+publishes no message-link form at all. Sent by the same connected account that
+posted the ads, into a group it already belongs to, so no bot invite is needed.
+**Consequence.** The archive runs inside ``settle()`` **before**
+``reopen_for_repeat``, which is the only moment the round's
+``destination_message_id`` values still exist — afterwards they are cleared and
+the links are gone. Verified by moving the call after the reopen: the repeating
+case then archives nothing. Best-effort throughout: the ads are already
+delivered by the time this runs, and a missing copy is a smaller loss than a
+round marked failed over its own bookkeeping. Only groups that actually
+received the ad are indexed — a record that claimed otherwise would be a lie in
+the one place kept as evidence.
+
+### ADR-058 — A supergroup id without the -100 prefix produces no link
+**Context.** ``t.me/c/`` addresses a supergroup by its internal id, which is
+``peer_id`` with Telegram's ``-100`` prefix removed.
+**Decision.** If the prefix is absent, no link is returned rather than one
+built from the raw number.
+**Consequence.** Stripping a prefix that is not there would silently address a
+*different* chat — a link in a permanent record pointing at someone else's
+group. An empty field is the honest answer.
+
 ---
 
 ## Open tradeoffs

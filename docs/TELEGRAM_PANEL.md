@@ -284,6 +284,28 @@ seconds across the whole round and risks **your** account being read as a
 flood. Every wait Telegram asks for is still obeyed in full, and a group with
 slow mode adds its own.
 
+### Keeping your own copy (Archive)
+
+**🗄 Archive** on the home screen picks one group of yours to keep copies in.
+Make a group, keep it to yourself, and point this at it.
+
+After every round the bot posts two things there, in this order:
+
+1. **The ad itself** — the same text, the same bold, the same premium emoji.
+2. **An index** of every group that received it, with a link to each post.
+
+The order is deliberate, and so is the copy. A link into a **private** group
+(`t.me/c/…`) only opens for *members* of that group — so if the account that
+posted is ever gone, every one of those links is dead. Links to **public**
+groups (`t.me/username/…`) keep working for anyone. And a **basic** group has
+no message link at all; Telegram publishes no form for them, so the index says
+so rather than inventing one.
+
+The copy is the part that survives all of that. That is why it goes first.
+
+The copies are sent by the same connected account that posted the ads, into a
+group it is already in — the bot does not need to be added anywhere.
+
 ### You get told how it went
 
 When a round finishes the bot messages you by itself: how many of the groups

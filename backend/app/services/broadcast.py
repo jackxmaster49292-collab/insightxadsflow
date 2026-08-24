@@ -48,7 +48,7 @@ from app.domain import reasons
 from app.repositories import broadcasts as broadcast_repo
 from app.repositories import chats as chat_repo
 from app.repositories import events as event_repo
-from app.services import safety
+from app.services import archive, safety
 from app.services import users as user_service
 from app.services.delivery import DeliveryOutcome, backoff_seconds
 
@@ -295,6 +295,7 @@ async def execute_target(
             exc=exc,
             connection=connection,
             max_attempts=settings.max_attempts,
+            adapter=adapter,
         )
 
     if not access.allowed:
@@ -364,6 +365,7 @@ async def execute_target(
             exc=exc,
             connection=connection,
             max_attempts=settings.max_attempts,
+            adapter=adapter,
         )
 
     await broadcast_repo.finish(
@@ -382,11 +384,16 @@ async def execute_target(
         attempt=target.attempt_count,
     )
     connection.consecutive_failure_count = 0
-    await settle(session, broadcast=broadcast)
+    await settle(session, broadcast=broadcast, adapter=adapter)
     return DeliveryOutcome(JobStatus.succeeded, reasons.BROADCAST_POSTED)
 
 
-async def settle(session: AsyncSession, *, broadcast: Broadcast) -> bool:
+async def settle(
+    session: AsyncSession,
+    *,
+    broadcast: Broadcast,
+    adapter: TelegramAdapter | None = None,
+) -> bool:
     """Finish the round: either the ad is done, or the next one is scheduled.
 
     Returns True only when the broadcast is finished for good. A repeating ad
@@ -405,6 +412,16 @@ async def settle(session: AsyncSession, *, broadcast: Broadcast) -> bool:
     # outcome exists in full.
     counts = await broadcast_repo.status_counts(session, broadcast_id=broadcast.id)
     await _report_round(session, broadcast=broadcast, counts=counts)
+
+    # Before the reopen below, for the same reason the counts are: afterwards
+    # every ``destination_message_id`` has been cleared, and those ids are the
+    # links. Best-effort — the ads are already delivered, and a missing copy is
+    # a smaller loss than a round marked failed over its own bookkeeping.
+    if adapter is not None:
+        try:
+            await archive.store_round(session, broadcast=broadcast, adapter=adapter)
+        except Exception as exc:
+            log.warning("archive_failed", broadcast_id=str(broadcast.id), error=str(exc))
 
     if broadcast.repeat_every_s:
         # The gap is measured from the round *finishing*, not from when it
@@ -489,6 +506,7 @@ async def _handle_failure(
     exc: BaseException,
     connection: TelegramConnection,
     max_attempts: int,
+    adapter: TelegramAdapter | None = None,
 ) -> DeliveryOutcome:
     """Same taxonomy as forwarding: retry, skip, or pause — never guess."""
     classified = classify_error(exc)
@@ -536,7 +554,7 @@ async def _handle_failure(
             classified.code,
             EventOutcome.skipped,
         )
-        await settle(session, broadcast=broadcast)
+        await settle(session, broadcast=broadcast, adapter=adapter)
         return DeliveryOutcome(JobStatus.skipped, classified.code)
 
     # Rate limits: obey Telegram's number exactly. Slow mode lands here too, and
@@ -604,7 +622,7 @@ async def _handle_failure(
             EventOutcome.failed,
         )
         await safety.note_connection_failure(session, connection=connection)
-        await settle(session, broadcast=broadcast)
+        await settle(session, broadcast=broadcast, adapter=adapter)
         return DeliveryOutcome(JobStatus.dead_letter, reasons.MAX_ATTEMPTS_EXCEEDED)
 
     delay = backoff_seconds(target.attempt_count)

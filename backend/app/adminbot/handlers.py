@@ -59,6 +59,7 @@ from app.repositories import panel_buttons as panel_buttons_repo
 from app.repositories import panel_emoji as panel_emoji_repo
 from app.repositories import rules as rule_repo
 from app.repositories import users as user_repo
+from app.services import archive as archive_service
 from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
 from app.services import rules as rule_service
@@ -306,6 +307,53 @@ async def start(
 async def nav_roles(query: CallbackQuery, **_extra: Any) -> None:
     await _render(query, views.roles(links=get_settings().public_links))
     await query.answer()
+
+
+async def _archive_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
+    async with session_scope() as session:
+        chats = await _postable_chats(session, user_id, groups_only=True)
+        current = await archive_service.archive_chat(session, user_id=user_id)
+        title = current.title if current else None
+    return views.archive_settings(current=title, chats=chats, page=page)
+
+
+@router.callback_query(F.data.startswith("nav:arch"))
+async def nav_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    await _render(query, await _archive_screen(user_id, page=_page_from(query.data or "")))
+    await query.answer()
+
+
+@router.callback_query(F.data.startswith("arch:"))
+async def set_archive(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    parts = (query.data or "").split(":")
+    verb = parts[1] if len(parts) > 1 else ""
+
+    async with session_scope() as session:
+        setting = await user_repo.get_settings_row(session, user_id=user_id)
+        if setting is None:
+            from app.db.models import AppSetting
+
+            setting = AppSetting(user_id=user_id)
+            session.add(setting)
+
+        if verb == "off":
+            setting.archive_chat_id = None
+            notice = "Archive off."
+        else:
+            chat_id = views.as_uuid(parts[2] if len(parts) > 2 else None)
+            # Resolved through the user-scoped repository, so an id alone is
+            # never enough to point someone's archive at another account's chat.
+            chat = (
+                await chat_repo.get(session, user_id=user_id, chat_id=chat_id) if chat_id else None
+            )
+            if chat is None:
+                await query.answer("That group is not in your list.", show_alert=True)
+                return
+            setting.archive_chat_id = chat.id
+            notice = f"Copies go to {chat.title}."
+
+    await _render(query, await _archive_screen(user_id, page=0))
+    await query.answer(notice)
 
 
 @router.callback_query(F.data == "nav:about")

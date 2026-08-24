@@ -322,7 +322,10 @@ def home(
                 InlineKeyboardButton(text="📊 Activity", callback_data="nav:activity"),
                 InlineKeyboardButton(text="🔄 Refresh", callback_data="nav:home"),
             ],
-            [InlineKeyboardButton(text="ℹ️ About", callback_data="nav:about")],
+            [
+                InlineKeyboardButton(text="🗄 Archive", callback_data="nav:arch:0"),
+                InlineKeyboardButton(text="ℹ️ About", callback_data="nav:about"),
+            ],
             # Only operators see this, and only they can reach the handler —
             # hiding the button is presentation, the middleware is the gate.
             [
@@ -373,6 +376,8 @@ PANEL_EMOJI: tuple[str, ...] = tuple(
             "🚶",
             "🐢",
             "📥",
+            "🗄",
+            "📁",
         ]
     )
 )
@@ -482,6 +487,7 @@ RENAMEABLE_BUTTONS: tuple[str, ...] = (
     "✏️ Edit",
     "⬅️ Back",
     "✅ Done",
+    "🗄 Archive",
 )
 
 BUTTONS_PAGE_SIZE = 8
@@ -1240,6 +1246,64 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
             if stoppable
             else [],
             [InlineKeyboardButton(text="⬅️ Ads", callback_data="nav:ads:0"), *_home_row()],
+        ),
+    )
+
+
+def archive_settings(
+    *,
+    current: object | None,
+    chats: Sequence,  # type: ignore[type-arg]
+    page: int,
+) -> Screen:
+    """Choose one group to keep copies of every ad in.
+
+    A single choice, so this is its own list rather than the multi-select
+    picker: tapping a group *is* the answer, with no Done to forget.
+    """
+    lines = [
+        "🗄 *Archive*",
+        "",
+        "Every ad you send gets copied into one group of your own, followed by "
+        "an index of where it went\\.",
+        "",
+        "*Why the copy and not just links:* a link into a private group only "
+        "opens for members of it\\. If the account that posted is ever gone, "
+        "those links go with it — the copy does not\\. That is the part worth "
+        "keeping\\.",
+        "",
+    ]
+    if current is not None:
+        lines.append(f"*Now* — {escape(str(current))}")
+    else:
+        lines.append("*Now* — off\\. Tap a group to start keeping copies\\.")
+
+    if not chats:
+        lines += [
+            "",
+            "No groups synced yet — connect an account and tap *Sync groups* first\\.",
+        ]
+
+    window, page, pages = _page_of(chats, page, PICKER_PAGE_SIZE)
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{'✅ ' if current == chat.title else ''}{chat.title[:44]}",
+                callback_data=f"arch:s:{chat.id}",
+            )
+        ]
+        for chat in window
+    ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *rows,
+            _pager("nav:arch:", page, pages),
+            [InlineKeyboardButton(text="🚫 Turn off", callback_data="arch:off")]
+            if current is not None
+            else [],
+            _back("nav:home"),
         ),
     )
 
