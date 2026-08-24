@@ -112,12 +112,23 @@ async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Desti
     # nowhere else" is a property of the system, not of one screen.
     owner = await session.get(User, user_id)
     if owner is None or owner.telegram_user_id is None:
+        log.info("archive_skipped", reason="this account has no Telegram id")
         return None
     if not get_settings().is_admin(owner.telegram_user_id):
+        # Said out loud, because this is the likeliest reason an archive that
+        # was configured stops arriving — the operator list changed, or it was
+        # set up before the feature became operator-only. Silence here reads as
+        # "the feature is broken" when it is doing exactly what it was told.
+        log.info(
+            "archive_skipped",
+            reason="not an operator of this deployment",
+            telegram_user_id=owner.telegram_user_id,
+        )
         return None
 
     setting = await session.get(AppSetting, user_id)
-    if setting is None:
+    if setting is None or (setting.archive_bot_chat_id is None and setting.archive_chat_id is None):
+        log.info("archive_skipped", reason="no archive chat chosen")
         return None
 
     if setting.archive_bot_chat_id is not None:
