@@ -187,6 +187,15 @@ class User(Base, TimestampMixin):
     broadcasts_sent: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    #: Promoted to operator from inside the panel, by an operator.
+    #:
+    #: ``ADMIN_TELEGRAM_IDS`` stays the root of trust — an id in it is always an
+    #: operator and cannot be demoted here, so a deployment can never lock
+    #: itself out by a mis-tap. This column is the *addition*: a second account
+    #: of the owner's, granted in one tap instead of an edit-and-redeploy.
+    is_operator: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     #: When this person asked to be told the publisher side had opened. Kept as
     #: a timestamp rather than a flag so the operator can see *demand over
     #: time*, which is the only thing that would justify building it.

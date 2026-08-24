@@ -2536,7 +2536,51 @@ async def user_actions(
             await query.answer("That account no longer exists.", show_alert=True)
             return
 
-        if action == "asksus":
+        if action == "op":
+            if get_settings().is_admin(target.telegram_user_id or 0):
+                await query.answer("Already an operator, from the settings file.")
+                return
+            await _render(query, views.confirm_operator(user=target))
+            await query.answer()
+            return
+
+        if action == "opyes":
+            # Guarded again here, not only behind the confirmation screen: a
+            # callback can be replayed directly, and this one grants power.
+            target.is_operator = True
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="user.make_operator",
+                object_type="user",
+                object_id=str(target.id),
+                payload={"telegram_user_id": target.telegram_user_id},
+            )
+            notice = "Now an operator."
+
+        elif action == "unop":
+            if target.id == user_id:
+                # Demoting yourself from the only account you can reach the
+                # panel with is a locked door with the key inside.
+                await query.answer("You cannot remove your own operator access.", show_alert=True)
+                return
+            if get_settings().is_admin(target.telegram_user_id or 0):
+                await query.answer(
+                    "That id is in the settings file, so it stays an operator.", show_alert=True
+                )
+                return
+            target.is_operator = False
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="user.remove_operator",
+                object_type="user",
+                object_id=str(target.id),
+                payload={"telegram_user_id": target.telegram_user_id},
+            )
+            notice = "No longer an operator."
+
+        elif action == "asksus":
             if target.id == user_id:
                 await query.answer("You cannot suspend yourself.", show_alert=True)
                 return
@@ -2561,7 +2605,11 @@ async def user_actions(
             notice = "Reinstated. Their rules and ads stay paused until they restart them."
 
         activity = await user_repo.activity_for(session, user_id=target.id)
-        screen = views.user_detail(user=target, activity=activity)
+        screen = views.user_detail(
+            user=target,
+            activity=activity,
+            from_env=get_settings().is_admin(target.telegram_user_id or 0),
+        )
 
     await _render(query, screen)
     await query.answer(notice)

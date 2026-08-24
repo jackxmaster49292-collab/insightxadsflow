@@ -286,7 +286,9 @@ slow mode adds its own.
 
 ### Keeping your own copy (Archive)
 
-**🗄 Archive** (operators only) picks one group to keep copies in. Make a
+**🗄 Archive** (operators only) picks one group to keep copies in. There is
+one archive for the whole deployment, so ads sent from any operator account
+land in the same group. Make a
 group, keep it to yourself, and point this at it. There are two ways, and they
 differ in *who* posts the copies:
 
@@ -508,3 +510,18 @@ The worker never calls the Bot API. When a rule or connection pauses itself, the
 worker writes a row to `admin_notifications` and the bot drains that outbox and
 sends it. Alerts therefore survive a bot restart, and a `dedupe_key` collapses a
 failing rule's repeats into one message rather than a storm (ADR-022).
+
+## Adding another of your own accounts (operators)
+
+Message the bot once from the other account, then from an operator account open
+**👥 Users**, tap it, and tap **🔑 Make operator**. It takes effect
+immediately — no settings file, no redeploy.
+
+Only an existing operator can grant this, and the confirmation says exactly
+what it hands over. It is not automatic on purpose: on an open deployment
+anyone gets an account just by messaging the bot, so operator access is granted
+rather than acquired.
+
+The ids in `ADMIN_TELEGRAM_IDS` are always operators and cannot be removed from
+the panel — that is what stops a deployment locking itself out. Nobody can
+remove their own access either.

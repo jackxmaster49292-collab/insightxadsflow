@@ -560,7 +560,9 @@ def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:
     )
 
 
-def user_detail(*, user, activity: dict[str, int]) -> Screen:  # type: ignore[no-untyped-def]
+def user_detail(  # type: ignore[no-untyped-def]
+    *, user, activity: dict[str, int], from_env: bool = False
+) -> Screen:
     """One account, as counts.
 
     Deliberately shows nothing about *what* they send. Suspending does not need
@@ -578,6 +580,10 @@ def user_detail(*, user, activity: dict[str, int]) -> Screen:  # type: ignore[no
         lines.append(f"*Reason* — {escape(user.suspended_reason)}")
     if user.terms_accepted_at is None:
         lines.append("*Terms* — not accepted yet")
+    if from_env:
+        lines.append("*Operator* — yes, from this deployment's settings file")
+    elif user.is_operator:
+        lines.append("*Operator* — yes")
 
     lines += [
         "",
@@ -594,9 +600,46 @@ def user_detail(*, user, activity: dict[str, int]) -> Screen:  # type: ignore[no
         else InlineKeyboardButton(text="🚫 Suspend", callback_data=f"usr:{user.id}:asksus")
     )
 
+    # An id from the settings file cannot be demoted here — it is the root of
+    # trust, and a deployment that can tap itself out of its own operator list
+    # is one mis-tap from being locked out.
+    operator_button: list[InlineKeyboardButton] = []
+    if not from_env:
+        operator_button = [
+            InlineKeyboardButton(
+                text="🔑 Remove operator" if user.is_operator else "🔑 Make operator",
+                callback_data=f"usr:{user.id}:{'unop' if user.is_operator else 'op'}",
+            )
+        ]
+
     return Screen(
         "\n".join(lines),
-        _rows([action], _back("nav:users:0")),
+        _rows([action], operator_button, _back("nav:users:0")),
+    )
+
+
+def confirm_operator(*, user) -> Screen:  # type: ignore[no-untyped-def]
+    """Granting operator is not an undoable tap, so it is asked once.
+
+    The list of what it hands over is the whole point of asking: on an open
+    deployment anyone can get an account by messaging the bot, so this is the
+    line between a user and someone who can act on every user.
+    """
+    return Screen(
+        f"🔑 *Make {escape(_user_label(user))} an operator?*\n\n"
+        "They will be able to:\n"
+        "• see every account and suspend any of them\n"
+        "• set where the archive of posted ads goes\n"
+        "• change the panel's icons and button labels\n\n"
+        "They will *not* be able to see anyone's messages or ads — no operator "
+        "can\\.\n\n"
+        "Grant this only to an account you own\\. On this deployment anyone can "
+        "get an account by messaging the bot, so this is the line between a "
+        "user and someone who can act on every user\\.",
+        _rows(
+            [InlineKeyboardButton(text="Yes, make operator", callback_data=f"usr:{user.id}:opyes")],
+            [InlineKeyboardButton(text="Cancel", callback_data=f"usr:{user.id}")],
+        ),
     )
 
 

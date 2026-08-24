@@ -35,6 +35,7 @@ from app.db.models import (
 )
 from app.domain.message_links import LinkKind, link_for
 from app.repositories import chats as chat_repo
+from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
 
@@ -89,9 +90,23 @@ class Destination:
     via_bot: bool
 
 
+async def _any_operator_setting(session: AsyncSession) -> AppSetting | None:
+    """The deployment's archive setting, whichever operator saved it.
+
+    Ordered by ``updated_at`` so the most recent choice wins: if two operator
+    accounts each set one, the last person to decide is the one who meant it.
+    """
+    result = await session.execute(
+        select(AppSetting)
+        .where(AppSetting.archive_bot_chat_id.isnot(None) | AppSetting.archive_chat_id.isnot(None))
+        .order_by(AppSetting.updated_at.desc())
+    )
+    return result.scalars().first()
+
+
 async def archive_chat(session: AsyncSession, *, user_id: uuid.UUID) -> TelegramChat | None:
-    """The synced group this customer keeps account-delivered copies in."""
-    setting = await session.get(AppSetting, user_id)
+    """The synced group the deployment keeps account-delivered copies in."""
+    setting = await _any_operator_setting(session)
     if setting is None or setting.archive_chat_id is None:
         return None
     return await session.get(TelegramChat, setting.archive_chat_id)
@@ -114,7 +129,10 @@ async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Desti
     if owner is None or owner.telegram_user_id is None:
         log.info("archive_skipped", reason="this account has no Telegram id")
         return None
-    if not get_settings().is_admin(owner.telegram_user_id):
+    # Asks the same question the panel asks, so an account granted operator
+    # from inside the bot archives immediately — without this the grant would
+    # work everywhere *except* the feature it was most often granted for.
+    if not await user_service.is_operator(session, telegram_user_id=owner.telegram_user_id):
         # Said out loud, because this is the likeliest reason an archive that
         # was configured stops arriving — the operator list changed, or it was
         # set up before the feature became operator-only. Silence here reads as
@@ -126,8 +144,13 @@ async def destination_for(session: AsyncSession, *, user_id: uuid.UUID) -> Desti
         )
         return None
 
-    setting = await session.get(AppSetting, user_id)
-    if setting is None or (setting.archive_bot_chat_id is None and setting.archive_chat_id is None):
+    # One archive for the deployment, not one per operator. The owner reaches
+    # this bot from more than one Telegram account, and "my Logs group" is a
+    # property of the deployment rather than of whichever account happened to
+    # send an ad. Per-operator settings meant that promoting a second account
+    # still left it archiving nowhere — a trap with no upside.
+    setting = await _any_operator_setting(session)
+    if setting is None:
         log.info("archive_skipped", reason="no archive chat chosen")
         return None
 

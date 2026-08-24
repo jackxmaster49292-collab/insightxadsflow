@@ -1162,3 +1162,41 @@ async def test_a_round_where_every_group_refuses_archives_nothing(client, actor,
     await session.commit()
 
     assert _bot_script().calls_to("send_text") == [], "nothing delivered, nothing to file"
+
+
+async def test_one_archive_serves_every_operator_account(
+    client, actor, other_actor, session, monkeypatch
+):
+    """The trap this closes: promoting a second account still left it archiving
+    nowhere, because the setting was per-account. The owner reaches this bot
+    from more than one Telegram account and means one Logs group."""
+    from app.config import get_settings
+    from app.repositories import users as user_repo
+    from tests.integration.test_bot_flows import ADMIN_CHAT
+
+    # The archive is configured by the *first* operator account.
+    setting = await session.get(AppSetting, uuid.UUID(actor.id))
+    if setting is None:
+        setting = AppSetting(user_id=uuid.UUID(actor.id))
+        session.add(setting)
+    setting.archive_bot_chat_id = BOT_GROUP_ID
+    await session.commit()
+
+    # A second account is granted operator and sends the ad.
+    second = await user_repo.get_by_id(session, uuid.UUID(other_actor.id))
+    second.telegram_user_id = 7_675_995_840
+    second.is_operator = True
+    await session.commit()
+    monkeypatch.setattr(get_settings(), "admin_telegram_ids", str(ADMIN_CHAT), raising=False)
+
+    ctx = await build_broadcast(other_actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    archived = _bot_script().calls_to("send_text")
+    assert archived, "the second account's ad reached the one archive"
+    assert archived[-1].args[0].peer_id == BOT_GROUP_ID

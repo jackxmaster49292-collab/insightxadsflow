@@ -966,6 +966,37 @@ guard restored. The general lesson is the older one from ADR-062: a condition
 that decides whether work happens must not also be the reason no one hears
 about it.
 
+### ADR-068 — Operator is granted in the panel, never acquired
+**Context.** The owner reaches this bot from more than one Telegram account,
+and every new one meant editing ``ADMIN_TELEGRAM_IDS`` and redeploying. They
+asked for it to happen automatically. Automatic in the literal sense is not
+available: ``ACCESS_MODE=open`` gives an account to anyone who messages the
+bot, so promoting whoever appears would hand strangers the ability to suspend
+accounts and reach every operator screen.
+**Decision.** ``users.is_operator``, granted by an existing operator from the
+Users screen in two taps and effective immediately — no file, no redeploy.
+``ADMIN_TELEGRAM_IDS`` remains the **root of trust**: an id there is an
+operator regardless of the database and cannot be demoted from the panel, so
+no mis-tap can lock a deployment out of itself. Nobody may remove their own
+access, for the same reason.
+**Consequence.** The grant is asked once, on a screen that names what it hands
+over — see every account and suspend any of them, set the archive, change the
+panel's chrome — and what it does not: no operator can read anyone's messages
+or ads. Resolution lives in ``user_service.is_operator`` and every gate calls
+it, including the archive's; a grant that worked everywhere except the feature
+it was granted for would be worse than no grant at all.
+
+### ADR-069 — One archive per deployment, not per operator
+**Context.** With the archive keyed to a user, promoting a second account left
+it archiving nowhere — the setting belonged to the first account. The owner
+means "my Logs group", not "this account's Logs group".
+**Decision.** The archive destination resolves to whichever operator saved one,
+most recent first, so any operator account's ads land in the same place.
+**Consequence.** Setting it from a second account moves it for everyone, which
+is the intent; the ordering makes the last decision the live one. This is right
+because operators are trusted by definition here — the same trust that already
+lets them suspend accounts.
+
 ---
 
 ## Open tradeoffs
