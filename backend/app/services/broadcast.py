@@ -243,6 +243,7 @@ async def execute_target(
             JobStatus.skipped,
             reasons.ACCOUNT_SUSPENDED,
             broadcast_id=broadcast.id,
+            adapter=adapter,
         )
 
     if connection.status is not ConnectionStatus.active:
@@ -252,6 +253,7 @@ async def execute_target(
             JobStatus.skipped,
             reasons.CONNECTION_DISCONNECTED,
             broadcast_id=broadcast.id,
+            adapter=adapter,
         )
 
     if broadcast.status is not BroadcastStatus.sending:
@@ -261,6 +263,7 @@ async def execute_target(
             JobStatus.skipped,
             reasons.BROADCAST_INACTIVE,
             broadcast_id=broadcast.id,
+            adapter=adapter,
         )
 
     chat = await _load_chat(session, target.chat_id)
@@ -271,6 +274,7 @@ async def execute_target(
             JobStatus.skipped,
             reasons.DESTINATION_REMOVED,
             broadcast_id=broadcast.id,
+            adapter=adapter,
         )
 
     has_media = broadcast.media_kind is not BroadcastMedia.none and broadcast.media_bytes
@@ -282,6 +286,7 @@ async def execute_target(
             reasons.BROADCAST_EMPTY,
             broadcast_id=broadcast.id,
             destination_id=chat.id,
+            adapter=adapter,
         )
 
     # --- revalidate authorization; fail closed on uncertainty ---------------
@@ -331,6 +336,7 @@ async def execute_target(
             access.reason_code,
             broadcast_id=broadcast.id,
             destination_id=chat.id,
+            adapter=adapter,
         )
 
     # --- deliver ------------------------------------------------------------
@@ -433,11 +439,17 @@ async def settle(
     # every ``destination_message_id`` has been cleared, and those ids are the
     # links. Best-effort — the ads are already delivered, and a missing copy is
     # a smaller loss than a round marked failed over its own bookkeeping.
-    if adapter is not None:
-        try:
-            await archive.store_round(session, broadcast=broadcast, adapter=adapter)
-        except Exception as exc:
-            log.warning("archive_failed", broadcast_id=str(broadcast.id), error=str(exc))
+    #
+    # Called unconditionally. It used to be skipped when ``adapter`` was None,
+    # which happens whenever the target that *completes* the round was skipped
+    # rather than sent — and then nothing was archived and nothing was logged,
+    # so a round that reached seven groups of eight left no trace at all.
+    # ``store_round`` needs no account adapter for the bot route and says so
+    # for the account route, which is the right place for that judgement.
+    try:
+        await archive.store_round(session, broadcast=broadcast, adapter=adapter)
+    except Exception as exc:
+        log.warning("archive_failed", broadcast_id=str(broadcast.id), error=str(exc))
 
     if broadcast.repeat_every_s:
         # The gap is measured from the round *finishing*, not from when it
@@ -689,6 +701,7 @@ async def _terminal(
     *,
     broadcast_id: uuid.UUID | None = None,
     destination_id: uuid.UUID | None = None,
+    adapter: TelegramAdapter | None = None,
 ) -> DeliveryOutcome:
     await broadcast_repo.finish(session, target=target, status=status, error_code=reason_code)
     if broadcast_id is not None:
@@ -703,5 +716,5 @@ async def _terminal(
                 destination_chat_id=destination_id,
                 attempt=target.attempt_count,
             )
-            await settle(session, broadcast=broadcast)
+            await settle(session, broadcast=broadcast, adapter=adapter)
     return DeliveryOutcome(status, reason_code)

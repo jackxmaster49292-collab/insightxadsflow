@@ -946,6 +946,26 @@ archives nothing, since an empty index is noise in the one place kept as
 evidence. Verified by removing the call: the stopped-ad test fails on an empty
 archive.
 
+### ADR-067 — The archive runs on every settled round, not only the sent ones
+**Context.** A round that delivered to 7 of 8 groups archived nothing and
+logged nothing. The cause was a guard: ``settle()`` called ``store_round`` only
+``if adapter is not None``. Every path that settles a round *after a send*
+carries the adapter, but the path that settles after a **skip** —
+``_terminal`` — did not pass one. So whenever the group that happened to finish
+the round was refused rather than sent, the archive was silently skipped. The
+round-finished alert still went out, which made it look like everything had
+worked.
+**Decision.** ``settle()`` calls ``store_round`` unconditionally and lets it
+decide: the bot route needs no account adapter, and the account route logs why
+it cannot proceed. ``_terminal`` also takes and forwards the adapter, so the
+skip path can still learn group bios.
+**Consequence.** Two failures in one: a feature that did nothing, and a guard
+that made "did nothing" indistinguishable from "was never asked". Reproduced by
+a test whose *last* group refuses, which fails on an empty archive with the
+guard restored. The general lesson is the older one from ADR-062: a condition
+that decides whether work happens must not also be the reason no one hears
+about it.
+
 ---
 
 ## Open tradeoffs

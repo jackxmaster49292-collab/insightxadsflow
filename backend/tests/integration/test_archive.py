@@ -1107,3 +1107,58 @@ async def test_the_database_keeps_the_description_verbatim(client, actor, sessio
 
     await session.refresh(chat)
     assert chat.description == bio
+
+
+async def test_a_round_finished_by_a_skipped_group_still_archives(client, actor, session):
+    """The reported failure, exactly: 7 of 8 delivered, the 8th refused, and
+    nothing arrived. The refusal path settled the round without an adapter, and
+    the archive sat behind an ``if adapter is not None`` — so it did nothing and
+    logged nothing."""
+    from app.adapters.base import AccessReport
+    from app.domain import reasons
+    from app.repositories import chats as chat_repo
+
+    ctx = await build_broadcast(actor, session, groups=3, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    # The *last* group refuses, so it is the one that completes the round.
+    blocked = chat_repo.to_ref(await session.get(TelegramChat, ctx["chat_ids"][-1]))
+    script_for(ctx["connection_id"]).destination_allowed[blocked.key] = AccessReport(
+        allowed=False, reason_code=reasons.WRITE_FORBIDDEN
+    )
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    archived = _bot_script().calls_to("send_text")
+    assert archived, "the two delivered groups are still recorded"
+    index = archived[-1].args[1]
+    assert "2 groups" in index
+    assert "Group 03" not in index, "and the refused one is not claimed"
+
+
+async def test_a_round_where_every_group_refuses_archives_nothing(client, actor, session):
+    from app.adapters.base import AccessReport
+    from app.domain import reasons
+    from app.repositories import chats as chat_repo
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    script = script_for(ctx["connection_id"])
+    for chat_id in ctx["chat_ids"]:
+        ref = chat_repo.to_ref(await session.get(TelegramChat, chat_id))
+        script.destination_allowed[ref.key] = AccessReport(
+            allowed=False, reason_code=reasons.WRITE_FORBIDDEN
+        )
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert _bot_script().calls_to("send_text") == [], "nothing delivered, nothing to file"
