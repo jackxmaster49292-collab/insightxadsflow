@@ -1201,6 +1201,35 @@ looking at. ``page_of_chats`` is shared between the fetch and the render so the
 two cannot disagree about which six; a second implementation would drift and
 quietly fetch the wrong ones.
 
+### ADR-084 — The set of panel emoji is read from the source, not written down
+**Context.** ``PANEL_EMOJI`` was a hand-kept tuple. It had already lost twelve
+of them — including 🔗 on the Accounts button and ☑️/⬜️, the tick boxes in the
+group picker — and the loss was silent: a new button simply never got a premium
+icon and nobody noticed.
+**Decision.** ``emoji_scan.panel_emoji()`` reads ``views`` and ``handlers``
+with ``inspect.getsource`` and returns every emoji it finds. Matching is
+generous on purpose — a spare lookup for an emoji in a comment costs half a
+second once, a missed one costs a plain icon among premium ones forever.
+Variation selectors are preserved, because ``⚠`` and ``⚠️`` are different
+strings that Telegram indexes differently.
+**Consequence.** Drift is now impossible by construction, which also makes the
+obvious test vacuous: asking "is every emoji in the source covered?" proves
+nothing when the covered set *is* the source. The real risk is the regex
+missing a Unicode block, so the guard checks the scanner against
+``unicodedata`` instead — every character it calls a symbol must be one the
+scanner found. Verified by deleting the Geometric Shapes block: the guard names
+``▶ U+25B6``, which is exactly the miss that left the Resume button plain.
+
+### ADR-085 — The icons screen names what has no premium version
+**Context.** The operator has joined the packs and wanted to supply the rest by
+hand — but only a count was shown, so finding *which* ones meant comparing the
+panel against itself.
+**Decision.** After extraction the screen lists every icon with no match, on
+one copyable line, above the instructions for sending a replacement pair.
+**Consequence.** The list is the work queue: each one is answered with
+``<emoji> <id>`` and disappears from it. When it empties the screen says so
+rather than showing an empty heading.
+
 ---
 
 ## Open tradeoffs

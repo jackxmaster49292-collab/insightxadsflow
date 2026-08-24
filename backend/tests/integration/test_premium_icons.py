@@ -191,7 +191,7 @@ async def test_an_operator_extracts_ids_from_their_own_account(client, actor, st
     await session.commit()
     connection_id = connection.id
     script = script_for(connection_id)
-    for emoticon in views.PANEL_EMOJI:
+    for emoticon in views.panel_emoji():
         script.custom_emoji[emoticon] = [f"55{abs(hash(emoticon)) % 10**15}"]
 
     await handlers.op_emoji(
@@ -199,7 +199,7 @@ async def test_an_operator_extracts_ids_from_their_own_account(client, actor, st
     )
 
     stored = await panel_emoji_repo.get_map(session)
-    assert len(stored) == len(views.PANEL_EMOJI)
+    assert len(stored) == len(views.panel_emoji())
     assert premium_icons.enabled()
     assert "Live" in Sent.last() or "Extracted" in Sent.last()
     assert_valid_markdown_v2(premium_icons.strip(Sent.last()))
@@ -468,13 +468,13 @@ async def test_icons_are_fetched_at_startup_without_anyone_asking(
 
     connection = await _operator_account(session, actor, monkeypatch)
     script = script_for(connection.id)
-    for emoticon in views.PANEL_EMOJI:
+    for emoticon in views.panel_emoji():
         script.custom_emoji[emoticon] = [f"55{abs(hash(emoticon)) % 10**15}"]
 
     await icon_setup.ensure_icons()
 
     stored = await panel_emoji_repo.get_map(session)
-    assert len(stored) == len(views.PANEL_EMOJI)
+    assert len(stored) == len(views.panel_emoji())
     assert premium_icons.enabled()
 
 
@@ -740,12 +740,14 @@ async def test_the_accounts_own_packs_are_preferred_over_searching(
 
     connection = await _operator_account(session, actor, monkeypatch)
     script = script_for(connection.id)
-    script.installed_emoji = {emoticon: f"pack-{i}" for i, emoticon in enumerate(views.PANEL_EMOJI)}
+    script.installed_emoji = {
+        emoticon: f"pack-{i}" for i, emoticon in enumerate(views.panel_emoji())
+    }
     script.custom_emoji = {"🔥": ["searched"]}
 
     found = await icon_setup.fetch_icons(await _adapter_for(session, connection))
 
-    assert len(found) == len(views.PANEL_EMOJI)
+    assert len(found) == len(views.panel_emoji())
     assert found["🔥"] == script.installed_emoji["🔥"], "owned beats suggested"
     assert script.calls_to("custom_emoji_ids") == [], "nothing left to search for"
 
@@ -768,3 +770,109 @@ async def _adapter_for(session, connection):
     from app.services import connections as connection_service
 
     return await connection_service.adapter_for(session, connection)
+
+
+# --------------------------------------------------------------------------- #
+# Nothing is left plain
+# --------------------------------------------------------------------------- #
+def test_the_scanner_misses_no_block_any_screen_uses():
+    """Checked against a second opinion, because the obvious test is vacuous.
+
+    Asking "is every emoji in the source covered?" proves nothing when the
+    covered set *is* the source. The real risk is the scanner's own regex
+    missing a Unicode block — which happened: ▶ lives in Geometric Shapes,
+    the first version did not list that block, and the Resume button sat plain
+    among premium ones.
+
+    So the oracle is ``unicodedata``: every character it calls a symbol must be
+    one the scanner also found. That fails the moment a block is missing,
+    whatever the source happens to contain.
+    """
+    import unicodedata
+
+    from app.adminbot.emoji_scan import emoji_in
+    from tests.integration.test_bot_flows import _every_screen
+
+    missed: dict[str, str] = {}
+    for name, screen in _every_screen():
+        surface = screen.text + " ".join(
+            b.text for row in screen.keyboard.inline_keyboard for b in row
+        )
+        by_scanner = set("".join(emoji_in(surface)))
+        for char in surface:
+            if unicodedata.category(char) == "So" and char not in by_scanner:
+                missed[char] = f"{name} (U+{ord(char):04X})"
+
+    assert not missed, f"the scanner does not know these are emoji: {missed}"
+
+
+def test_every_rendered_emoji_reaches_the_extractor():
+    """The set the extractor asks Telegram about is the set the screens draw."""
+    from app.adminbot.emoji_scan import emoji_in
+    from tests.integration.test_bot_flows import _every_screen
+
+    covered = set(views.panel_emoji())
+    for name, screen in _every_screen():
+        surface = screen.text + " ".join(
+            b.text for row in screen.keyboard.inline_keyboard for b in row
+        )
+        for emoji in emoji_in(surface):
+            assert emoji in covered, f"{emoji} is drawn on {name} and never looked up"
+
+
+def test_the_scan_reads_the_source_rather_than_a_list():
+    """A list drifts; the source is the thing being described."""
+    found = views.panel_emoji()
+    assert len(found) > 40
+    # A sample of icons from screens added at very different times.
+    for emoji in ("📣", "🗄", "☑️", "▶️", "🧹", "🩺"):
+        assert emoji in found, f"{emoji} is drawn somewhere and was not found"
+
+
+def test_variation_selectors_are_kept_apart():
+    """``⚠`` and ``⚠️`` are different strings and Telegram indexes them
+    differently, so collapsing them would map the wrong one."""
+    from app.adminbot.emoji_scan import emoji_in
+
+    assert emoji_in("⚠️ warning") == ["⚠️"]
+    assert emoji_in("⚠ warning") == ["⚠"]
+
+
+def test_letterlike_symbols_are_not_mistaken_for_emoji():
+    """``™`` sits in the same block as ``ℹ️``. Searching Telegram for a premium
+    trademark sign is a wasted lookup and a confusing "not found" entry."""
+    from app.adminbot.emoji_scan import emoji_in
+
+    assert emoji_in("InsightAdFlow™ №1") == []
+    assert emoji_in("ℹ️ About") == ["ℹ️"]
+
+
+def test_the_screen_lists_what_has_no_premium_version():
+    """The operator asked to be told which ones to do by hand — a list they can
+    copy, not a count they have to work out."""
+    wanted = ("✅", "📣", "🔥")
+    screen = views.premium_icons_status(
+        extracted={"✅": "1"},
+        live=True,
+        suspended=False,
+        has_user_connection=True,
+        wanted=wanted,
+    )
+
+    assert "No premium version found for 2" in screen.text
+    assert "📣" in screen.text and "🔥" in screen.text
+    assert "✅" not in screen.text.split("No premium version")[1], "the found one is not listed"
+    assert_valid_markdown_v2(screen.text)
+
+
+def test_the_screen_says_so_when_nothing_is_missing():
+    screen = views.premium_icons_status(
+        extracted={"✅": "1", "📣": "2"},
+        live=True,
+        suspended=False,
+        has_user_connection=True,
+        wanted=("✅", "📣"),
+    )
+    assert "Every icon has one" in screen.text
+    assert "No premium version" not in screen.text
+    assert_valid_markdown_v2(screen.text)

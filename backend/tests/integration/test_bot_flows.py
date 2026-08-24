@@ -992,12 +992,13 @@ def test_the_checker_accepts_correctly_paired_formatting():
 # --------------------------------------------------------------------------- #
 # Every button reaches exactly one handler
 # --------------------------------------------------------------------------- #
-def _every_callback() -> set[str]:
-    """Every ``callback_data`` the panel's screens can emit.
+def _every_screen() -> list[tuple[str, object]]:
+    """Every panel screen, rendered once, each with a name.
 
-    Gathered by rendering the screens rather than from a hand-written list,
-    because a hand-written list is exactly the thing that stops matching the
-    code it describes.
+    One list, shared by everything that needs to look at the whole panel — the
+    handler-overlap guard and the emoji-coverage guard both do. Two lists would
+    drift, and the one left behind would stop checking the newest screens
+    without ever saying so.
     """
     from types import SimpleNamespace
 
@@ -1008,7 +1009,7 @@ def _every_callback() -> set[str]:
     broadcast = a_broadcast(BroadcastStatus.sending)
     connection = a_connection("active")
 
-    screens = [
+    named = [
         views.about(),
         views.home(connections=[connection], rules=[], broadcasts=[broadcast], counts={}),
         views.home(
@@ -1034,10 +1035,20 @@ def _every_callback() -> set[str]:
         views.connection_detail(connection=connection, chat_count=1),
         views.confirm_disconnect(connection=connection),
         views.activity(events=[]),
+        views.user_groups(
+            user=SimpleNamespace(id=uuid.uuid4(), telegram_username="u", telegram_user_id=1),
+            chats=[],
+            page=0,
+        ),
+        views.dead_groups(chats=[], page=0, temporary=frozenset()),
     ]
+    return [(f"screen {i}", screen) for i, screen in enumerate(named)]
 
+
+def _every_callback() -> set[str]:
+    """Every ``callback_data`` the panel's screens can emit."""
     found: set[str] = set()
-    for screen in screens:
+    for _name, screen in _every_screen():
         for row in screen.keyboard.inline_keyboard:
             for button in row:
                 if button.callback_data:

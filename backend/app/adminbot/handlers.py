@@ -2186,11 +2186,11 @@ async def op_emoji(
                 user_id=user_id,
                 action="panel_emoji.extract",
                 object_type="panel_emoji",
-                payload={"matched": len(mapping), "of": len(views.PANEL_EMOJI)},
+                payload={"matched": len(mapping), "of": len(views.panel_emoji())},
             )
         premium_icons.set_map(mapping)
         await _render(query, await _emoji_status_screen(user_id))
-        await query.answer(f"Matched {len(mapping)} of {len(views.PANEL_EMOJI)} icons.")
+        await query.answer(f"Matched {len(mapping)} of {len(views.panel_emoji())} icons.")
         return
 
     await _render(query, await _emoji_status_screen(user_id))

@@ -47,13 +47,13 @@ async def fetch_icons(adapter: TelegramAdapter) -> dict[str, str]:
     found: dict[str, str] = {}
 
     owned = await adapter.installed_custom_emoji()
-    for emoticon in views.PANEL_EMOJI:
+    for emoticon in views.panel_emoji():
         for candidate in (emoticon, emoticon.rstrip("️")):
             if candidate in owned:
                 found[emoticon] = owned[candidate]
                 break
 
-    for emoticon in views.PANEL_EMOJI:
+    for emoticon in views.panel_emoji():
         if emoticon in found:
             continue
         ids = await adapter.custom_emoji_ids(emoticon)
@@ -120,12 +120,12 @@ async def ensure_icons() -> None:
                     await adapter.disconnect()
 
         if not found:
-            log.warning("panel_icons_empty", searched=len(views.PANEL_EMOJI))
+            log.warning("panel_icons_empty", searched=len(views.panel_emoji()))
             return
 
         async with session_scope() as session:
             await panel_emoji_repo.replace(session, mapping=found)
         premium_icons.set_map(found)
-        log.info("panel_icons_ready", matched=len(found), of=len(views.PANEL_EMOJI))
+        log.info("panel_icons_ready", matched=len(found), of=len(views.panel_emoji()))
     except Exception as exc:  # pragma: no cover - network path
         log.warning("panel_icons_failed", error=str(exc))

@@ -211,48 +211,18 @@ def home(
     )
 
 
-#: Every unicode emoji the panel draws in message text. The union of the status
-#: icons and the screen furniture, deduplicated in place. Extraction walks this
-#: list; anything Telegram has no premium version of simply stays plain.
-PANEL_EMOJI: tuple[str, ...] = tuple(
-    dict.fromkeys(
-        [
-            *STATUS_ICON.values(),
-            "📡",
-            "📣",
-            "💬",
-            "🧾",
-            "📊",
-            "🚀",
-            "⚠️",
-            "🔁",
-            "⏱",
-            "🖼",
-            "✏️",
-            "🗑",
-            "🏠",
-            "⬅️",
-            "➡️",
-            "➕",
-            "💭",
-            "👥",
-            "✨",
-            "🔄",
-            "▶️",
-            "🔥",
-            "🏘",
-            "ℹ️",
-            "🔔",
-            "🔤",
-            "⚡",
-            "🚶",
-            "🐢",
-            "📥",
-            "🗄",
-            "📁",
-        ]
-    )
-)
+def panel_emoji() -> tuple[str, ...]:
+    """Every emoji the panel draws, read from its own source.
+
+    A function rather than a constant, and derived rather than written down: a
+    hand-kept list drifts the moment a screen is added, and the drift is
+    silent — the new button simply never gets a premium icon. The first version
+    of this *was* a list, and it had already lost twelve, including the tick
+    boxes in the group picker.
+    """
+    from app.adminbot.emoji_scan import panel_emoji as scan
+
+    return scan()
 
 
 def premium_icons_status(
@@ -261,6 +231,7 @@ def premium_icons_status(
     live: bool,
     suspended: bool,
     has_user_connection: bool,
+    wanted: Sequence[str] = (),
 ) -> Screen:
     """The operator's premium-icon screen: what is extracted, and the truth
     about whether Telegram will draw it.
@@ -269,9 +240,13 @@ def premium_icons_status(
     rejects every custom-emoji message a bot sends, and an operator who was not
     told would read the plain icons as this feature being broken.
     """
+    wanted = wanted or panel_emoji()
+    total = len(wanted)
+    missing = [e for e in wanted if e not in extracted]
+
     lines = ["✨ *Premium icons*", ""]
     if extracted:
-        lines.append(f"*Extracted* — {len(extracted)} of {len(PANEL_EMOJI)} icons")
+        lines.append(f"*Extracted* — {len(extracted)} of {total} icons")
         if suspended:
             lines += [
                 "",
@@ -291,6 +266,22 @@ def premium_icons_status(
             "custom emoji match each icon the panel uses, and stores their "
             "ids\\. Nothing is hardcoded — the ids are Telegram documents\\.",
         ]
+    if extracted and missing:
+        # Listed rather than counted, and in one copyable line: these are the
+        # ones to answer with a `<emoji> <id>` pair, and hunting for which is
+        # the whole cost of doing it by hand.
+        lines += [
+            "",
+            f"*No premium version found for {len(missing)}:*",
+            "",
+            escape(" ".join(missing)),
+            "",
+            "_Send any of these back to me as a pair — the emoji, a space, and "
+            "the id of the premium one you want in its place\\._",
+        ]
+    elif extracted:
+        lines += ["", "✅ *Every icon has one\\.*"]
+
     lines += [
         "",
         "When do they actually render? Telegram's rule, for text and buttons "

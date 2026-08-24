@@ -231,6 +231,15 @@ premium owner is enough here. If Telegram refuses anyway, the panel quietly
 falls back to plain icons rather than breaking, and the ✨ Icons screen says
 that is what happened; extract again after fixing the cause and it retries.
 
+The panel works out which emoji it draws by reading its own screens, so every
+icon on every button and in every message is covered — nothing has to be added
+to a list when a screen changes.
+
+After extraction the ✨ Icons screen lists any icon Telegram had no premium
+version of, on one line you can copy. Send each back as a pair — the emoji, a
+space, and the id of the one you want in its place — and it drops off the list.
+When the list empties the screen says so.
+
 **You should not have to do anything.** When the panel starts and no icons are
 stored yet, it fetches them itself through your connected account — one lookup
 per icon, in the background. Only an *operator's* account is ever used for
