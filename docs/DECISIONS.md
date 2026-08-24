@@ -1256,6 +1256,39 @@ writes a row, carrying the built-in label, so nothing appears to rename itself.
 One reload function does all three: three separate loads is three chances to
 reload two of them.
 
+### ADR-088 — The library is the panel's whole alphabet, not its matched half
+**Context.** 🎨 Library listed the emoji that *had* an id. Extraction never
+matches all of them — Telegram simply has no premium version of some — and the
+only route to fixing one was to retype the character beside a number, which is
+awkward for exactly the characters an operator does not have to hand.
+**Decision.** The library lists every emoji the panel draws, from the same
+source scan as ADR-084, mapped or not. Each is a button; behind it sits one
+screen for that character, where the id can arrive alone because the screen
+already knows which emoji it is for.
+**Consequence.** The count on screen is the truth about coverage rather than a
+count of successes, and the emoji most worth reaching — the unmatched one — is
+the one the old screen was structurally unable to show. The callback carries
+the character, so it is validated against the scan before use: an id set for a
+character no screen contains would sit in the table forever, matching nothing.
+Editing one merges into the stored map rather than replacing it, since
+``replace`` swaps the whole table.
+
+### ADR-089 — A button's icon is settable on its own, and wins over the label
+**Context.** An icon could only be set while renaming, by sending the id
+alongside the new words. Changing the picture meant restating the text.
+**Decision.** ✨ beside 🎨 on each row, its own screen and its own FSM state, so
+an id may be sent bare. The screen names the automatic icon it would replace —
+the one inferred from the emoji the label starts with — because that one is
+right for almost every button and an operator should see what they are
+overriding.
+**Consequence.** Pinning an icon strips the leading plain emoji from the label,
+or the icon and the character would be the same picture twice, side by side.
+Resetting a label no longer deletes the row: it restores the built-in words and
+keeps the icon and colour, since deleting threw away two settings an operator
+never asked to lose. A row that carries only an icon or a colour holds the
+built-in label, and ``get_map`` now excludes those — reporting them as renames
+put ``📣 Ads → 📣 Ads`` on the buttons screen and counted it among the renamed.
+
 ---
 
 ## Open tradeoffs

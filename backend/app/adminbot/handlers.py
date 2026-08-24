@@ -2164,6 +2164,46 @@ async def op_emoji(
         await query.answer()
         return
 
+    if action in ("one", "ask", "del"):
+        emoticon = (query.data or "").split(":", 3)[3] if (query.data or "").count(":") >= 3 else ""
+        alphabet = views.panel_emoji()
+        if emoticon not in alphabet:
+            await query.answer("Unknown emoji.", show_alert=True)
+            return
+        page = alphabet.index(emoticon) // views.LIBRARY_PAGE_SIZE
+
+        if action == "ask":
+            await state.clear()
+            await state.set_state(IconSetup.one)
+            await state.update_data(emoticon=emoticon)
+            if isinstance(query.message, Message):
+                await _ask(
+                    query.message,
+                    f"Send the premium emoji to draw in place of {views.escape(emoticon)} "
+                    "— or just its id as digits\\. /cancel to leave it alone\\.",
+                )
+            await query.answer()
+            return
+
+        async with session_scope() as session:
+            mapping = await panel_emoji_repo.get_map(session)
+            if action == "del" and mapping.pop(emoticon, None) is not None:
+                await panel_emoji_repo.replace(session, mapping=mapping)
+                await event_repo.audit(
+                    session,
+                    user_id=user_id,
+                    action="panel_emoji.unset",
+                    object_type="panel_emoji",
+                    object_id=emoticon,
+                )
+                premium_icons.set_map(mapping)
+        await _render(
+            query,
+            views.emoji_one(emoticon=emoticon, custom_id=mapping.get(emoticon), page=page),
+        )
+        await query.answer("Plain again." if action == "del" else None)
+        return
+
     if action == "run":
         # Inline rather than queued, like the sign-in flow: a burst of small
         # searches through the operator's own connection, with the operator
@@ -2246,6 +2286,70 @@ def _typed_emoji_pairs(text: str) -> dict[str, str]:
     return pairs
 
 
+def _one_icon_id(message: Message) -> str | None:
+    """The one custom-emoji id in a message, however it was sent.
+
+    Three spellings, because all three reach this bot in practice: a premium
+    emoji picked from the keyboard (an entity), Telegram's markup form pasted
+    from somewhere, or the bare digits. Used where the panel already knows
+    *what* the id is for, so the id may arrive alone.
+    """
+    sent = _custom_emoji_pairs(message)
+    if sent:
+        return next(iter(sent.values()))
+    text = (message.text or message.caption or "").strip()
+    as_markup = premium_icons.CUSTOM_EMOJI_MARKUP.search(text)
+    if as_markup:
+        return as_markup.group(2)
+    bare = premium_icons.BARE_EMOJI_ID.search(text)
+    return bare.group(1) if bare else None
+
+
+@router.message(IconSetup.one)
+async def icon_one(message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any) -> None:
+    data = await state.get_data()
+    emoticon = data.get("emoticon")
+    alphabet = views.panel_emoji()
+    if not isinstance(emoticon, str) or emoticon not in alphabet:
+        await state.clear()
+        await _go_home(message, user_id)
+        return
+
+    custom_id = _one_icon_id(message)
+    if custom_id is None:
+        await _ask(
+            message,
+            "Nothing usable in that\\. Send the premium emoji itself — from "
+            "the *animated* rows of your keyboard, since a plain one carries "
+            "no id — or paste the id as digits\\. /cancel to leave it alone\\.",
+        )
+        return
+
+    async with session_scope() as session:
+        mapping = await panel_emoji_repo.get_map(session)
+        mapping[emoticon] = custom_id
+        await panel_emoji_repo.replace(session, mapping=mapping)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="panel_emoji.set",
+            object_type="panel_emoji",
+            object_id=emoticon,
+            payload={"total": len(mapping)},
+        )
+    premium_icons.set_map(mapping)
+
+    await state.clear()
+    await _send(
+        message,
+        views.emoji_one(
+            emoticon=emoticon,
+            custom_id=custom_id,
+            page=alphabet.index(emoticon) // views.LIBRARY_PAGE_SIZE,
+        ),
+    )
+
+
 @router.message(IconSetup.collect)
 async def icon_collect(
     message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
@@ -2280,6 +2384,17 @@ async def icon_collect(
         message,
         f"Got {len(pairs)} — {len(merged)} icons mapped now\\. Send more, or /cancel to finish\\.",
     )
+
+
+def _inferred_icon(text: str, emoji_map: dict[str, str]) -> str | None:
+    """The icon the automatic pass would give a button with this label.
+
+    Same rule as the renderer's: the longest mapped emoji the label starts
+    with. Shown on the icon screen so an operator can see what they would be
+    overriding before they override it.
+    """
+    lead = next((e for e in sorted(emoji_map, key=len, reverse=True) if text.startswith(e)), None)
+    return emoji_map[lead] if lead else None
 
 
 async def _reload_button_look(session) -> None:  # type: ignore[no-untyped-def]
@@ -2342,6 +2457,53 @@ async def op_buttons(
         await query.answer()
         return
 
+    if len(parts) >= 4 and parts[2] in ("ico", "ask", "auto") and parts[3].isdigit():
+        index = int(parts[3])
+        if index >= len(views.RENAMEABLE_BUTTONS):
+            await query.answer("Unknown button.", show_alert=True)
+            return
+        default = views.RENAMEABLE_BUTTONS[index]
+
+        if parts[2] == "ask":
+            await state.clear()
+            await state.set_state(EditButton.icon)
+            await state.update_data(button_index=index)
+            if isinstance(query.message, Message):
+                await _ask(
+                    query.message,
+                    f"Send the icon for *{views.escape(default)}* — the premium "
+                    "emoji itself, or its id as digits\\. The button keeps its "
+                    "words; only the picture in front of them changes\\.",
+                )
+            await query.answer()
+            return
+
+        async with session_scope() as session:
+            if parts[2] == "auto":
+                await panel_buttons_repo.set_icon(session, default_text=default, icon_id=None)
+                await event_repo.audit(
+                    session,
+                    user_id=user_id,
+                    action="panel_button.icon",
+                    object_type="panel_button",
+                    object_id=default,
+                    payload={"icon": None},
+                )
+                await _reload_button_look(session)
+            icons = await panel_buttons_repo.get_icons(session)
+            emoji_map = await panel_emoji_repo.get_map(session)
+        await _render(
+            query,
+            views.button_icon_picker(
+                default_text=default,
+                index=index,
+                current=icons.get(default),
+                inherited=_inferred_icon(default, emoji_map),
+            ),
+        )
+        await query.answer("Automatic again." if parts[2] == "auto" else None)
+        return
+
     if len(parts) >= 5 and parts[2] == "sty":
         index = int(parts[3]) if parts[3].isdigit() else -1
         choice = int(parts[4]) if parts[4].isdigit() else -1
@@ -2378,6 +2540,53 @@ async def op_buttons(
         custom = await panel_buttons_repo.get_map(session)
     await _render(query, views.panel_buttons_list(custom=custom, page=page))
     await query.answer()
+
+
+@router.message(EditButton.icon)
+async def button_icon(
+    message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
+) -> None:
+    data = await state.get_data()
+    index = data.get("button_index")
+    if not isinstance(index, int) or index >= len(views.RENAMEABLE_BUTTONS):
+        await state.clear()
+        await _go_home(message, user_id)
+        return
+    default = views.RENAMEABLE_BUTTONS[index]
+
+    icon_id = _one_icon_id(message)
+    if icon_id is None:
+        await _ask(
+            message,
+            "Nothing usable in that\\. Send the premium emoji itself — from "
+            "the *animated* rows of your keyboard — or paste its id as "
+            "digits\\. /cancel to leave the button alone\\.",
+        )
+        return
+
+    async with session_scope() as session:
+        await panel_buttons_repo.set_icon(session, default_text=default, icon_id=icon_id)
+        await event_repo.audit(
+            session,
+            user_id=user_id,
+            action="panel_button.icon",
+            object_type="panel_button",
+            object_id=default,
+            payload={"icon": icon_id},
+        )
+        await _reload_button_look(session)
+        emoji_map = await panel_emoji_repo.get_map(session)
+
+    await state.clear()
+    await _send(
+        message,
+        views.button_icon_picker(
+            default_text=default,
+            index=index,
+            current=icon_id,
+            inherited=_inferred_icon(default, emoji_map),
+        ),
+    )
 
 
 @router.message(EditButton.text)

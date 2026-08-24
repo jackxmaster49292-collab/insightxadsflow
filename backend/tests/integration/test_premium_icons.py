@@ -885,23 +885,61 @@ def test_the_screen_says_so_when_nothing_is_missing():
 def test_the_library_shows_every_id_in_a_copyable_form():
     """The ids are the point: an operator who wants one inside an ad needs the
     number itself, and hunting for it through Telegram is the work this saves."""
-    screen = views.emoji_library(
-        extracted={"🔥": "5368324170671202286", "✅": "5215596888476929952"}, page=0
-    )
+    first = views.panel_emoji()[0]
+    screen = views.emoji_library(extracted={first: "5368324170671202286"}, page=0)
 
     assert "`5368324170671202286`" in screen.text, "monospace, so a tap copies it"
-    assert "🔥" in screen.text and "✅" in screen.text
+    assert first in screen.text
     assert_valid_markdown_v2(screen.text)
     assert_keyboard_is_sendable(screen.keyboard)
 
 
-def test_an_empty_library_says_how_to_fill_it():
+def test_the_library_lists_the_emoji_with_no_id_too():
+    """The one an operator most wants to reach is the one extraction missed —
+    and listing only the matched ones was the only way not to show it."""
+    alphabet = views.panel_emoji()
+    seen: set[str] = set()
+    for page in range(len(alphabet)):
+        screen = views.emoji_library(extracted={}, page=page)
+        for row in screen.keyboard.inline_keyboard:
+            for button in row:
+                if (button.callback_data or "").startswith("op:emoji:one:"):
+                    seen.add(button.callback_data.split(":", 3)[3])
+        assert_valid_markdown_v2(screen.text)
+        assert_keyboard_is_sendable(screen.keyboard)
+
+    assert seen == set(alphabet), "every emoji the panel draws is reachable"
+
+
+def test_an_untouched_library_still_offers_every_emoji():
     screen = views.emoji_library(extracted={}, page=0)
-    assert "Nothing saved yet" in screen.text
-    assert "op:emoji:send" in [
-        b.callback_data for row in screen.keyboard.inline_keyboard for b in row
-    ]
+    data = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
+
+    assert "op:emoji:send" in data
+    assert any((d or "").startswith("op:emoji:one:") for d in data)
+    assert f"*plain* {len(views.panel_emoji())}" in screen.text
     assert_valid_markdown_v2(screen.text)
+
+
+def test_the_screen_behind_a_library_entry_offers_both_ways():
+    """Where an unmatched emoji is finally fixable without retyping the
+    character beside a number."""
+    one = views.panel_emoji()[0]
+
+    plain = views.emoji_one(emoticon=one, custom_id=None, page=0)
+    data = [b.callback_data for row in plain.keyboard.inline_keyboard for b in row]
+    assert "Drawn plain" in plain.text
+    assert f"op:emoji:ask:{one}" in data
+    assert f"op:emoji:del:{one}" not in data, "nothing to clear yet"
+
+    mapped = views.emoji_one(emoticon=one, custom_id="5368324170671202286", page=0)
+    data = [b.callback_data for row in mapped.keyboard.inline_keyboard for b in row]
+    assert "`5368324170671202286`" in mapped.text
+    assert f"op:emoji:del:{one}" in data
+
+    assert_valid_markdown_v2(plain.text)
+    assert_valid_markdown_v2(mapped.text)
+    assert_keyboard_is_sendable(mapped.keyboard)
 
 
 async def test_a_button_can_be_given_one_of_telegrams_three_colours(client, actor, state, session):
@@ -958,8 +996,12 @@ async def test_a_colour_can_be_taken_back_off(client, actor, state, session):
 
 
 async def test_colouring_a_button_does_not_rename_it(client, actor, state, session):
-    """A colour with no rename still needs a row, and the label it carries must
-    be the built-in one so nothing appears to change."""
+    """A colour needs a row of its own, and that row must not read as a rename.
+
+    It carries the built-in label, so reporting it among the renames put
+    ``🚀 Send now → 🚀 Send now`` on the buttons screen and counted it — a
+    rename to the identical words, which is not one.
+    """
     from app.adminbot import handlers
     from app.repositories import panel_buttons as panel_buttons_repo
     from tests.integration.test_bot_flows import a_callback
@@ -975,7 +1017,12 @@ async def test_colouring_a_button_does_not_rename_it(client, actor, state, sessi
     )
 
     labels = await panel_buttons_repo.get_map(session)
-    assert labels["🚀 Send now"] == "🚀 Send now", "unchanged label"
+    assert "🚀 Send now" not in labels, "a colour is not a rename"
+
+    screen = views.panel_buttons_list(custom=labels, page=index // views.BUTTONS_PAGE_SIZE)
+    assert "→" not in " ".join(b.text for row in screen.keyboard.inline_keyboard for b in row), (
+        "and the screen shows no arrow"
+    )
 
 
 def test_the_picker_shows_each_choice_in_its_own_colour():
@@ -1011,3 +1058,252 @@ async def test_a_colour_survives_a_restart(client, actor, state, session):
 
     await handlers._reload_button_look(session)
     assert premium_icons.get_styles() == {"📣 Ads": "success"}
+
+
+# --------------------------------------------------------------------------- #
+# Setting one by hand — the emoji extraction could not match
+# --------------------------------------------------------------------------- #
+async def test_an_id_sent_for_one_emoji_maps_only_that_one(client, actor, state, session):
+    """The route that needs no keyboard and no pack: pick the emoji on screen,
+    send the digits. Extraction leaves some unmatched every time, and before
+    this the only fix was retyping the character beside the number — which is
+    exactly the character an operator does not have to hand."""
+    from app.adminbot import handlers
+    from app.adminbot.states import IconSetup
+    from app.repositories import panel_emoji as panel_emoji_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    one = views.panel_emoji()[0]
+    await handlers.op_emoji(
+        a_callback(f"op:emoji:ask:{one}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    assert await state.get_state() == IconSetup.one.state
+
+    await handlers.icon_one(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_emoji_repo.get_map(session) == {one: "5368324170671202286"}
+    assert premium_icons.get_map() == {one: "5368324170671202286"}, "and live at once"
+
+
+async def test_setting_one_emoji_leaves_the_others_alone(client, actor, state, session):
+    """``replace`` swaps the whole table, so a single edit has to merge first —
+    getting this wrong would wipe every other icon on each hand-set one."""
+    from app.adminbot import handlers
+    from app.repositories import panel_emoji as panel_emoji_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    first, second = views.panel_emoji()[0], views.panel_emoji()[1]
+    await panel_emoji_repo.replace(session, mapping={second: "111111111111111111"})
+    await session.commit()
+
+    await handlers.op_emoji(
+        a_callback(f"op:emoji:ask:{first}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.icon_one(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_emoji_repo.get_map(session) == {
+        second: "111111111111111111",
+        first: "5368324170671202286",
+    }
+
+
+async def test_one_emoji_can_be_put_back_to_plain(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.repositories import panel_emoji as panel_emoji_repo
+    from tests.integration.test_bot_flows import a_callback
+
+    one = views.panel_emoji()[0]
+    await panel_emoji_repo.replace(session, mapping={one: "5368324170671202286"})
+    await session.commit()
+
+    await handlers.op_emoji(
+        a_callback(f"op:emoji:del:{one}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    assert await panel_emoji_repo.get_map(session) == {}
+    assert premium_icons.get_map() == {}
+
+
+async def test_an_emoji_the_panel_does_not_draw_is_refused(client, actor, state, session):
+    """Callback data is not trustworthy input. An id set for a character no
+    screen contains would sit in the table forever, matching nothing."""
+    from app.adminbot import handlers
+    from app.adminbot.states import IconSetup
+    from tests.integration.test_bot_flows import a_callback
+
+    await handlers.op_emoji(
+        a_callback("op:emoji:ask:🦄"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    assert await state.get_state() != IconSetup.one.state
+
+
+# --------------------------------------------------------------------------- #
+# An icon pinned to one button
+# --------------------------------------------------------------------------- #
+async def test_a_button_icon_can_be_pinned_from_its_own_screen(client, actor, state, session):
+    """Beside the colour, and reachable without renaming anything: the icon is
+    a field of its own, so asking for the label again to change it was work
+    with no purpose."""
+    from app.adminbot import handlers
+    from app.adminbot.states import EditButton
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:ask:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    assert await state.get_state() == EditButton.icon.state
+
+    await handlers.button_icon(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_buttons_repo.get_icons(session) == {"📣 Ads": "5368324170671202286"}
+    assert await panel_buttons_repo.get_map(session) == {}, "pinning an icon is not a rename"
+
+
+async def test_a_pinned_icon_takes_the_plain_emoji_out_of_the_label(client, actor, state, session):
+    """The icon is drawn *before* the words. A label still opening with the
+    plain character shows the same picture twice, side by side."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:ask:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_icon(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    button = premium_icons.apply_labels(markup).inline_keyboard[0][0]
+    assert button.icon_custom_emoji_id == "5368324170671202286"
+    assert button.text == "Ads", "not '📣 Ads' beside the same picture"
+    assert await panel_buttons_repo.get_map(session) == {}, "and no rename was needed"
+
+
+async def test_a_pinned_icon_can_be_handed_back_to_the_automatic_one(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:ask:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_icon(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+    await handlers.op_buttons(
+        a_callback(f"op:btn:auto:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    assert await panel_buttons_repo.get_icons(session) == {}
+    assert premium_icons.get_button_icons() == {}
+
+
+async def test_a_pinned_icon_survives_a_restart(client, actor, state, session):
+    """The same promise as the colour: a redeploy must not fall back to plain."""
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:ask:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_icon(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    premium_icons.set_labels({}, {}, {})
+    assert premium_icons.get_button_icons() == {}
+
+    await handlers._reload_button_look(session)
+    assert premium_icons.get_button_icons() == {"📣 Ads": "5368324170671202286"}
+
+
+async def test_resetting_a_label_keeps_the_colour_and_the_icon(client, actor, state, session):
+    """Deleting the row was the obvious way and it threw away two other
+    settings: red button, reset the label, and the red went with it."""
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("🚫 Stop")
+    red = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v == "danger")
+    actor_id = uuid.UUID(actor.id)
+
+    await handlers.op_buttons(
+        a_callback(f"op:btn:sty:{index}:{red}"), user_id=actor_id, state=state, is_operator=True
+    )
+    await handlers.op_buttons(
+        a_callback(f"op:btn:ask:{index}"), user_id=actor_id, state=state, is_operator=True
+    )
+    await handlers.button_icon(a_message("5368324170671202286"), user_id=actor_id, state=state)
+    await handlers.op_buttons(
+        a_callback(f"op:btn:pick:{index}"), user_id=actor_id, state=state, is_operator=True
+    )
+    await handlers.button_label(a_message("-"), user_id=actor_id, state=state)
+
+    assert await panel_buttons_repo.get_map(session) == {}, "back to the built-in words"
+    assert await panel_buttons_repo.get_styles(session) == {"🚫 Stop": "danger"}, "still red"
+    assert await panel_buttons_repo.get_icons(session) == {"🚫 Stop": "5368324170671202286"}
+
+
+def test_the_icon_screen_names_the_automatic_one_it_would_replace():
+    """So an operator can see what they are overriding before they override
+    it — the automatic icon is right for almost every button."""
+    inherited = views.button_icon_picker(
+        default_text="📣 Ads", index=0, current=None, inherited="111111111111111111"
+    )
+    assert "Automatic" in inherited.text and "`111111111111111111`" in inherited.text
+
+    pinned = views.button_icon_picker(
+        default_text="📣 Ads", index=0, current="222222222222222222", inherited="111111111111111111"
+    )
+    assert "Pinned" in pinned.text and "`222222222222222222`" in pinned.text
+    assert "op:btn:auto:0" in [
+        b.callback_data for row in pinned.keyboard.inline_keyboard for b in row
+    ]
+
+    assert_valid_markdown_v2(inherited.text)
+    assert_valid_markdown_v2(pinned.text)
+    assert_keyboard_is_sendable(pinned.keyboard)

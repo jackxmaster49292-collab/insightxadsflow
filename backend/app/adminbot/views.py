@@ -357,35 +357,35 @@ RENAMEABLE_BUTTONS: tuple[str, ...] = (
 BUTTONS_PAGE_SIZE = 8
 
 
+#: Emoji per page in the library. Two to a row, so eight rows plus the pager.
+LIBRARY_PAGE_SIZE = 16
+
+
 def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
-    """Every saved emoji with its id, in a form that can be copied.
+    """Every emoji the panel draws, mapped or not, each one tappable.
 
-    The ids are the point. An operator who wants one inside an ad, or on a
-    button this panel does not own, needs the number itself — and hunting for
-    it through Telegram is exactly the work this screen exists to save.
+    Listing only the mapped ones was the smaller screen and the wrong one: the
+    emoji an operator most wants to reach is precisely the one extraction could
+    not match, and that was the only one this screen did not show. So the list
+    is the panel's own alphabet — all of it, in source order, with its id if it
+    has one — and every entry leads somewhere.
     """
-    if not extracted:
-        return Screen(
-            "🎨 *Emoji library*\n\nNothing saved yet\\.\n\n"
-            "Send me a message containing premium emoji and I will read their "
-            "ids off it\\.",
-            _rows(
-                [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
-                _back("op:emoji"),
-            ),
-        )
-
-    items = sorted(extracted.items())
-    window, page, pages = _page_of(items, page, PAGE_SIZE)
+    alphabet = panel_emoji()
+    window, page, pages = _page_of(alphabet, page, LIBRARY_PAGE_SIZE)
+    mapped = sum(1 for e in alphabet if e in extracted)
 
     lines = [
-        f"🎨 *Emoji library* \\({len(items)}\\)",
+        f"🎨 *Emoji library* — {len(alphabet)}",
         "",
-        "Tap and hold a line to copy its id\\.",
+        f"*Premium* {mapped} · *plain* {len(alphabet) - mapped}",
+        "",
+        "Tap any emoji below to give it a premium id by hand\\. Tap and hold a "
+        "line here to copy an id you already have\\.",
         "",
     ]
-    for emoticon, custom_id in window:
-        lines.append(f"{emoticon} `{escape(custom_id)}`")
+    for emoticon in window:
+        custom_id = extracted.get(emoticon)
+        lines.append(f"{emoticon} `{escape(custom_id)}`" if custom_id else f"{emoticon} —")
 
     lines += [
         "",
@@ -396,12 +396,64 @@ def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
         "MarkdownV2, so it takes that form\\._",
     ]
 
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(0, len(window), 2):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{e} set" if e in extracted else f"{e} —",
+                    callback_data=f"op:emoji:one:{e}",
+                )
+                for e in window[i : i + 2]
+            ]
+        )
+
     return Screen(
         "\n".join(lines),
         _rows(
+            *rows,
             _pager("op:emoji:lib:", page, pages),
             [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
             _back("op:emoji"),
+        ),
+    )
+
+
+def emoji_one(*, emoticon: str, custom_id: str | None, page: int) -> Screen:
+    """One emoji, and what it will be drawn as.
+
+    Reached from the library, and the whole reason it exists is the emoji with
+    no match: extraction cannot find every one, and without this screen the
+    only way to fix that was to retype the emoji alongside an id and hope the
+    right character was matched.
+    """
+    lines = [f"🎨 *{escape(emoticon)}*", ""]
+    if custom_id:
+        lines += [
+            "Drawn as a premium emoji\\.",
+            "",
+            f"`{escape(custom_id)}`",
+            "",
+            "Send another id to replace it, or clear it to go back to the plain character\\.",
+        ]
+    else:
+        lines += [
+            "Drawn plain\\.",
+            "",
+            "Send me the premium emoji you want here — from the *animated* "
+            "rows of your keyboard — or its id as digits\\. Either way it "
+            "replaces this character everywhere the panel draws it, in text "
+            "and on buttons both\\.",
+        ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            [InlineKeyboardButton(text="📥 Send one", callback_data=f"op:emoji:ask:{emoticon}")],
+            [InlineKeyboardButton(text="🚫 Clear", callback_data=f"op:emoji:del:{emoticon}")]
+            if custom_id
+            else [],
+            _back(f"op:emoji:lib:{page}"),
         ),
     )
 
@@ -449,6 +501,58 @@ def button_style_picker(*, default_text: str, index: int, current: str | None) -
     )
 
 
+def button_icon_picker(
+    *,
+    default_text: str,
+    index: int,
+    current: str | None,
+    inherited: str | None,
+) -> Screen:
+    """The icon for one button — the picture Telegram draws before its words.
+
+    Two ways a button gets one, and the difference is worth saying on screen:
+    the emoji it starts with is looked up in the library automatically, and
+    *that* is enough for almost every button. This screen is for the rest —
+    a button that should not wear the icon its emoji implies, or one whose
+    emoji has no premium version at all.
+    """
+    lines = [f"✨ *Icon for {escape(default_text)}*", ""]
+    if current:
+        lines += [
+            "*Pinned* — this exact id, whatever the label says\\.",
+            "",
+            f"`{escape(current)}`",
+        ]
+    elif inherited:
+        lines += [
+            "*Automatic* — from the emoji this button starts with\\.",
+            "",
+            f"`{escape(inherited)}`",
+        ]
+    else:
+        lines += [
+            "*Plain* — no premium version of this button's emoji is in the library yet\\.",
+        ]
+
+    lines += [
+        "",
+        "Send a premium emoji, or its id as digits, to pin one here\\. A "
+        "pinned icon wins over the automatic one and is stored in the "
+        "database, so a redeploy keeps it\\.",
+    ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            [InlineKeyboardButton(text="📥 Send id", callback_data=f"op:btn:ask:{index}")],
+            [InlineKeyboardButton(text="🔄 Automatic", callback_data=f"op:btn:auto:{index}")]
+            if current
+            else [],
+            _back(f"op:btn:{index // BUTTONS_PAGE_SIZE}"),
+        ),
+    )
+
+
 def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
     """Every renameable button, with its current label beside the default."""
     window, page, pages = _page_of(RENAMEABLE_BUTTONS, page, BUTTONS_PAGE_SIZE)
@@ -457,9 +561,10 @@ def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
     lines = [
         "🔤 *Button labels*",
         "",
-        "Tap a button to rename it everywhere it appears\\. The label is "
-        "stored in the database and survives restarts\\. Send `-` while "
-        "renaming to go back to the built\\-in label\\.",
+        "Tap a button to rename it everywhere it appears\\. 🎨 sets its "
+        "colour, ✨ its icon\\. All three are stored in the database and "
+        "survive restarts\\. Send `-` while renaming to go back to the "
+        "built\\-in label\\.",
         "",
     ]
     rows = []
@@ -468,8 +573,9 @@ def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
         shown = f"{default} → {current}" if current else default
         rows.append(
             [
-                InlineKeyboardButton(text=shown[:46], callback_data=f"op:btn:pick:{offset + i}"),
+                InlineKeyboardButton(text=shown[:40], callback_data=f"op:btn:pick:{offset + i}"),
                 InlineKeyboardButton(text="🎨", callback_data=f"op:btn:col:{offset + i}"),
+                InlineKeyboardButton(text="✨", callback_data=f"op:btn:ico:{offset + i}"),
             ]
         )
     if custom:

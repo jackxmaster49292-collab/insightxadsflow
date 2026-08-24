@@ -42,6 +42,22 @@ _EMOJI = re.compile(rf"{_BASE}️?(?:‍{_BASE}️?)*")
 _NOT_EMOJI = frozenset("™№℞℡⅍←↑→↓↔↕↖↗↘↙∀∃")
 
 
+def leading_emoji(text: str) -> str | None:
+    """The emoji ``text`` starts with, if it starts with one.
+
+    Used where a button is about to carry a premium icon: the icon is drawn
+    *before* the label, so the plain emoji still sitting at the front of that
+    label would be the same picture twice.
+    """
+    match = _EMOJI.match(text)
+    if match is None:
+        return None
+    emoji = match.group(0)
+    if emoji in _NOT_EMOJI or emoji.rstrip("️") in _NOT_EMOJI:
+        return None
+    return emoji
+
+
 def emoji_in(text: str) -> list[str]:
     """Every distinct emoji in ``text``, in the order it first appears."""
     found: list[str] = []

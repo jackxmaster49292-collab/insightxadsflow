@@ -25,6 +25,8 @@ import re
 import threading
 from typing import Any
 
+from app.adminbot.emoji_scan import leading_emoji
+
 _lock = threading.Lock()
 _map: dict[str, str] = {}
 _suspended = False
@@ -205,6 +207,14 @@ def apply_labels(markup: Any) -> Any:
                 update["text"] = labels[button.text]
             if button.text in icons:
                 update["icon_custom_emoji_id"] = icons[button.text]
+                # The icon is drawn before the label, so a label that still
+                # opens with the plain emoji shows the same picture twice.
+                # A button that is *only* an emoji keeps it — Telegram needs
+                # visible text, and an icon alone is not text.
+                shown = update.get("text", button.text)
+                lead = leading_emoji(shown)
+                if lead and shown[len(lead) :].strip():
+                    update["text"] = shown[len(lead) :].strip()
             if button.text in styles:
                 update["style"] = styles[button.text]
             if not update:

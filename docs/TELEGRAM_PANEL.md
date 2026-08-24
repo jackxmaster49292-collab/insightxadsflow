@@ -238,7 +238,9 @@ to a list when a screen changes.
 After extraction the ✨ Icons screen lists any icon Telegram had no premium
 version of, on one line you can copy. Send each back as a pair — the emoji, a
 space, and the id of the one you want in its place — and it drops off the list.
-When the list empties the screen says so.
+When the list empties the screen says so. Or open **🎨 Library**, tap the emoji
+itself, and send the id alone: nothing to retype and no chance of pairing the
+id with the wrong character.
 
 **You should not have to do anything.** When the panel starts and no icons are
 stored yet, it fetches them itself through your connected account — one lookup
@@ -254,16 +256,23 @@ from this chat — Telegram burns any login code it sees an account send — but
 sending emoji is just a message.) The account-search path still exists for
 operators who do have a connected account.
 
-### Renaming and colouring buttons (operators)
+### Renaming, colouring and icons on buttons (operators)
 
-**🔤 Buttons** on the operator home lists every renameable button. Tap the name
-to rename it — send the new text (up to 32 characters, one line) and it changes
-everywhere that button appears. Send `-` to go back to the built-in label. Send
-a custom-emoji id, or a premium emoji, and it becomes the button's icon.
+**🔤 Buttons** on the operator home lists every renameable button, each with
+three things you can change:
 
-Tap **🎨** beside a button for its colour. Telegram offers three — blue, green
-and red — plus its own default. Each choice is shown in its own colour. Worth
-using sparingly: three coloured buttons in a row of six read as three warnings.
+* **the name** — tap it, send the new text (up to 32 characters, one line) and
+  it changes everywhere that button appears. Send `-` to go back to the
+  built-in label; the colour and icon stay.
+* **🎨 the colour** — Telegram offers three, blue, green and red, plus its own
+  default. Each choice is shown in its own colour. Worth using sparingly:
+  three coloured buttons in a row of six read as three warnings.
+* **✨ the icon** — the picture drawn before the words. Almost every button
+  gets one automatically, looked up from the emoji it starts with, and the
+  screen names that one so you can see what you would be overriding. Send a
+  premium emoji or its id to pin a different one; **🔄 Automatic** hands it
+  back. A pinned icon takes the plain emoji out of the label, so the same
+  picture is never drawn twice.
 
 Labels, icons and colours all live in the database, so a redeploy keeps them.
 
@@ -611,9 +620,19 @@ an ad draft, or an auto-reply through this bot.
 
 ## The emoji library (operators)
 
-**✨ Icons → 🎨 Library** lists every saved emoji with its id in monospace — tap
-and hold to copy one. Useful when you want an id for an ad, or for something
-outside this panel.
+**✨ Icons → 🎨 Library** lists **every emoji the panel draws** — all of them,
+not only the ones with an id. Each shows its id in monospace, so tap and hold
+to copy one for an ad or for something outside this panel; the rest show a
+dash.
+
+Tap any emoji to open it on its own, then send the premium emoji you want in
+its place, or paste its id as digits. That replaces the character everywhere
+the panel draws it, in text and on buttons both, and **🚫 Clear** puts it back
+to plain.
+
+Listing only the matched ones was the smaller screen and the wrong one: the
+emoji you most want to reach is precisely the one extraction could not match,
+and that was the only one the old screen did not show.
 
 Two spellings mean the same thing to Telegram: `![🔥](tg://emoji?id=…)`, which
 this panel reads, and `<tg-emoji emoji-id="…">🔥</tg-emoji>`, which is the HTML

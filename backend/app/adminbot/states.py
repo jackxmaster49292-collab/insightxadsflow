@@ -58,6 +58,10 @@ class IconSetup(StatesGroup):
     #: The operator is sending premium emojis for the panel to adopt. Each
     #: message's custom-emoji entities are read off it; /cancel ends it.
     collect = State()
+    #: One named emoji is being given an id. The plain character sits in state
+    #: data under "emoticon", so the id can arrive on its own — which is the
+    #: point, since the emoji with no premium match is the awkward one to type.
+    one = State()
 
 
 class SetArchive(StatesGroup):
@@ -70,3 +74,6 @@ class EditButton(StatesGroup):
     #: Waiting for the new label. The chosen default's index into
     #: ``views.RENAMEABLE_BUTTONS`` sits in state data under "button_index".
     text = State()
+    #: Waiting for an icon id for that same button, and nothing else — so an
+    #: id can be sent bare, without having to retype the label beside it.
+    icon = State()

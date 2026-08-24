@@ -9,8 +9,18 @@ from app.db.models import PanelButton
 
 
 async def get_map(session: AsyncSession) -> dict[str, str]:
+    """Renames only.
+
+    A row can exist for an icon or a colour alone, and those carry the built-in
+    label. Reporting them as renames put ``📣 Ads → 📣 Ads`` on the buttons
+    screen and counted it among the renamed — a rename to the identical words.
+    """
     result = await session.execute(select(PanelButton))
-    return {row.default_text: row.custom_text for row in result.scalars().all()}
+    return {
+        row.default_text: row.custom_text
+        for row in result.scalars().all()
+        if row.custom_text != row.default_text
+    }
 
 
 async def get_styles(session: AsyncSession) -> dict[str, str]:
@@ -44,6 +54,22 @@ async def get_icons(session: AsyncSession) -> dict[str, str]:
     }
 
 
+async def set_icon(session: AsyncSession, *, default_text: str, icon_id: str | None) -> None:
+    """Pin one button's icon, or ``None`` to go back to the automatic one.
+
+    Same shape as :func:`set_style`: a row created for an icon alone carries
+    the built-in label, so pinning an icon never looks like a rename.
+    """
+    row = await session.get(PanelButton, default_text)
+    if row is None:
+        if icon_id is None:
+            return
+        row = PanelButton(default_text=default_text, custom_text=default_text)
+        session.add(row)
+    row.icon_custom_emoji_id = icon_id
+    await session.flush()
+
+
 async def set_label(
     session: AsyncSession,
     *,
@@ -71,9 +97,19 @@ async def set_label(
 
 
 async def reset_label(session: AsyncSession, *, default_text: str) -> bool:
-    result = await session.execute(
-        delete(PanelButton)
-        .where(PanelButton.default_text == default_text)
-        .returning(PanelButton.default_text)
-    )
-    return bool(result.all())
+    """Back to the built-in words, keeping any icon or colour chosen for it.
+
+    Deleting the row was the obvious way and it quietly threw away two other
+    settings: an operator who had picked a red button and then reset its label
+    lost the red as well, with nothing on screen to say so.
+    """
+    row = await session.get(PanelButton, default_text)
+    if row is None:
+        return False
+    if row.icon_custom_emoji_id is None and row.style is None:
+        await session.execute(delete(PanelButton).where(PanelButton.default_text == default_text))
+        await session.flush()
+        return True
+    row.custom_text = default_text
+    await session.flush()
+    return True
