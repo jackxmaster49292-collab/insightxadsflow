@@ -802,6 +802,26 @@ built from the raw number.
 *different* chat — a link in a permanent record pointing at someone else's
 group. An empty field is the honest answer.
 
+### ADR-059 — The index carries a private group's bio, because a title is not an identity
+**Context.** The operator's follow-up named the real failure mode: "a private
+group is very hard to find again — you don't remember the name". A
+members-only link plus a title is not enough to recognise a group months
+later.
+**Decision.** For groups whose link is not durable — private supergroups and
+basic groups — the archive index adds what the chat says about itself: its
+description (clipped to 160 characters) and its member count. Learned via
+``chat_details`` on the adapter (``GetFullChannel``/``GetFullChat`` under
+MTProto, ``getChat`` under the Bot API), cached on the chat row with a
+30-day staleness, and fetched at most 25 per archived round with a 500 ms
+gap, because ``GetFullChannel`` is among Telegram's most eagerly rate-limited
+calls — coverage converges over rounds instead of arriving as one burst.
+**Consequence.** ``ChatDetails`` is deliberately metadata-only: a description
+and a *count* Telegram publishes on the chat itself, never a participant list
+— ``getparticipants`` remains guard-banned, and nothing here enumerates a
+person. Public groups spend none of the lookup budget: a username is already
+a durable way back. A failed lookup costs the bio line only; the copy and the
+links are the record, and they go out regardless.
+
 ---
 
 ## Open tradeoffs

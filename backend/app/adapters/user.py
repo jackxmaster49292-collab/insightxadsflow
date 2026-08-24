@@ -21,6 +21,7 @@ from telethon.sessions import StringSession
 from app.adapters.base import (
     AccessReport,
     Capabilities,
+    ChatDetails,
     ChatRef,
     ConnectionState,
     DeliveryReceipt,
@@ -310,6 +311,30 @@ class UserAdapter:
         # but "should not" is not a parser.
         ids = getattr(result, "document_id", None) or []
         return [str(document_id) for document_id in ids]
+
+    async def chat_details(self, ref: ChatRef) -> ChatDetails:
+        """What the chat says about itself, from Telegram's ``full`` view.
+
+        ``participants_count`` is a number Telegram publishes on the chat, not
+        a roster — nothing here enumerates anyone, and nothing may. It is
+        included because "12,000 members" is often the detail that identifies
+        a private group again when its title alone does not.
+        """
+        await self._ready()
+        from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.tl.functions.messages import GetFullChatRequest
+
+        entity = await self._entity(ref)
+        if ref.peer_type is PeerKind.channel:
+            result = await self._client(GetFullChannelRequest(channel=entity))
+        else:
+            real_id, _ = utils.resolve_id(ref.peer_id)
+            result = await self._client(GetFullChatRequest(chat_id=real_id))
+
+        full = getattr(result, "full_chat", None)
+        about = (getattr(full, "about", None) or "").strip() or None
+        count = getattr(full, "participants_count", None)
+        return ChatDetails(description=about, member_count=int(count) if count else None)
 
     async def installed_custom_emoji(self) -> dict[str, str]:
         """Walk the account's own emoji packs, keyed by fallback emoji.

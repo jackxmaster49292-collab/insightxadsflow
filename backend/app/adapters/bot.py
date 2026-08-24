@@ -23,6 +23,7 @@ from app.adapters.base import (
     AccessReport,
     AmbiguousDeliveryError,
     Capabilities,
+    ChatDetails,
     ChatRef,
     ConnectionState,
     DeliveryReceipt,
@@ -310,6 +311,13 @@ class BotAdapter:
     async def installed_custom_emoji(self) -> dict[str, str]:
         # Nor any notion of packs a *bot* owns.
         return {}
+
+    async def chat_details(self, ref: ChatRef) -> ChatDetails:
+        chat = await self._bot.get_chat(ref.peer_id)
+        return ChatDetails(
+            description=getattr(chat, "description", None),
+            member_count=await self._bot.get_chat_member_count(ref.peer_id),
+        )
 
     async def send_text(
         self,

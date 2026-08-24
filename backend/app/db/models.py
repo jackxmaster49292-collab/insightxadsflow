@@ -351,6 +351,14 @@ class TelegramChat(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(64))
     chat_kind: Mapped[ChatKind] = mapped_column(_enum(ChatKind, "chat_kind"), nullable=False)
     is_public: Mapped[bool | None] = mapped_column(Boolean)
+    #: What the chat says about itself, and how big it is. Kept because a
+    #: private group is hard to recognise from its title alone months later,
+    #: and the archive is the record where that recognition has to happen.
+    #: ``member_count`` is a number Telegram publishes on the chat — never a
+    #: roster, which nothing in this codebase collects.
+    description: Mapped[str | None] = mapped_column(Text)
+    member_count: Mapped[int | None] = mapped_column(Integer)
+    details_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     has_protected_content: Mapped[bool | None] = mapped_column(Boolean)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

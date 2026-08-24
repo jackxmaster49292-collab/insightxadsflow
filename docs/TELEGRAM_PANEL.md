@@ -301,6 +301,13 @@ groups (`t.me/username/…`) keep working for anyone. And a **basic** group has
 no message link at all; Telegram publishes no form for them, so the index says
 so rather than inventing one.
 
+For a **private** group the index also records what the group says about
+itself — its bio and its member count — because months later the title alone
+is hard to recognise, and finding a private group again is exactly the hard
+part. (That is the group's own description, a thing Telegram publishes about
+the chat; nothing reads its members.) These details are learned a few groups
+per round and remembered, so a big list fills in over the first few rounds.
+
 The copy is the part that survives all of that. That is why it goes first.
 
 The copies are sent by the same connected account that posted the ads, into a

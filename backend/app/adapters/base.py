@@ -122,6 +122,18 @@ class HealthReport:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatDetails:
+    """What a chat publishes about itself.
+
+    ``member_count`` is a *number* Telegram already publishes, not a roster —
+    the difference between describing a group and collecting its people.
+    """
+
+    description: str | None = None
+    member_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class TextEntity:
     """One piece of formatting in a message.
 
@@ -215,6 +227,15 @@ class TelegramAdapter(Protocol):
         Empty when the provider cannot search (the Bot API has no such method)
         or when nothing matches. Ids are Telegram documents, so extraction is
         the only honest source — there is no table to ship.
+        """
+        ...
+
+    async def chat_details(self, ref: ChatRef) -> ChatDetails:
+        """A chat's own description and size — metadata, never its people.
+
+        Deliberately not a member list: this asks Telegram what the *chat*
+        says about itself, which is what identifies a private group again
+        months later when its title alone does not.
         """
         ...
 

@@ -283,3 +283,146 @@ def test_group_id_helper_is_a_supergroup_id():
     """The suite's own fixtures must exercise the -100 form, or the link tests
     would pass against ids Telegram never issues."""
     assert str(group_id(0)).startswith("-100")
+
+
+# --------------------------------------------------------------------------- #
+# The bio of a private group, so nothing is lost
+# --------------------------------------------------------------------------- #
+async def _details_for(session, ctx, script):
+    """Script a bio for every group in this broadcast."""
+    from app.adapters.base import ChatDetails
+    from app.repositories import chats as chat_repo
+
+    for chat_id in ctx["chat_ids"]:
+        chat = await session.get(TelegramChat, chat_id)
+        script.chat_details[chat_repo.to_ref(chat).key] = ChatDetails(
+            description=f"Deals and offers for {chat.title}", member_count=12_400
+        )
+
+
+async def test_a_private_groups_bio_and_size_are_in_the_index(client, actor, session):
+    """A members-only link needs the account to still be a member; the title
+    alone is hard to recognise months later. The bio and the size are what
+    identify the group again — which is the whole reason for keeping them."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    keep = await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    await _details_for(session, ctx, script)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    sends = script.calls_to("send_text")
+    index = [c for c in sends if c.args[0].peer_id == keep.peer_id][-1].args[1]
+    assert "Deals and offers for Group 01" in index
+    assert "12,400 members" in index
+
+
+async def test_details_are_cached_so_the_next_round_asks_nothing(client, actor, session):
+    """GetFullChannel is one of Telegram's most eagerly rate-limited calls.
+    Once learned, a bio is read from the chat row, not from Telegram."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    broadcast.repeat_every_s = 7200
+    await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    await _details_for(session, ctx, script)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+    first_round = len(script.calls_to("chat_details"))
+    assert first_round > 0
+
+    await drain(session, broadcast.id)  # round two, same groups
+    await session.commit()
+    assert len(script.calls_to("chat_details")) == first_round, "round two asked nothing"
+
+
+async def test_a_public_groups_details_are_not_fetched(client, actor, session):
+    """A username is already a durable way back; the lookup budget belongs to
+    the private groups that have no other identity."""
+    from sqlalchemy import update as sa_update
+
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _with_archive(session, actor, ctx)
+    await session.execute(
+        sa_update(TelegramChat)
+        .where(TelegramChat.id.in_(ctx["chat_ids"]))
+        .values(username="somepublicgroup", is_public=True)
+    )
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert script_for(ctx["connection_id"]).calls_to("chat_details") == []
+
+
+async def test_a_failing_details_lookup_still_archives_the_rest(client, actor, session):
+    """The copy and the links are the record; the bio is a garnish on it."""
+    ctx = await build_broadcast(actor, session, groups=2, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    keep = await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    script.fail_method("chat_details", RuntimeError("FLOOD_WAIT_42"))
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    sends = script.calls_to("send_text")
+    index = [c for c in sends if c.args[0].peer_id == keep.peer_id][-1].args[1]
+    assert "Group 01" in index and "t.me/c/" in index, "links survive a failed lookup"
+
+
+async def test_the_per_round_lookup_cap_is_respected(client, actor, session):
+    from app.services.archive import _DETAILS_PER_ROUND
+
+    groups = _DETAILS_PER_ROUND + 5
+    ctx = await build_broadcast(actor, session, groups=groups, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    await _details_for(session, ctx, script)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    assert len(script.calls_to("chat_details")) == _DETAILS_PER_ROUND
+
+
+async def test_a_long_bio_is_clipped_not_dominant(client, actor, session):
+    """One chatty bio must not swallow the chunk budget for everyone else."""
+    from app.adapters.base import ChatDetails
+    from app.repositories import chats as chat_repo
+    from app.services.archive import _BIO_CHARS
+
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    keep = await _with_archive(session, actor, ctx)
+    script = script_for(ctx["connection_id"])
+    chat = await session.get(TelegramChat, ctx["chat_ids"][0])
+    script.chat_details[chat_repo.to_ref(chat).key] = ChatDetails(
+        description="word " * 200, member_count=5
+    )
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    sends = script.calls_to("send_text")
+    index = [c for c in sends if c.args[0].peer_id == keep.peer_id][-1].args[1]
+    bio_line = next(line for line in index.splitlines() if "word" in line)
+    assert len(bio_line) < _BIO_CHARS + 40
+    assert "…" in bio_line

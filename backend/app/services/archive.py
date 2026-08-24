@@ -14,6 +14,7 @@ statement where it does not.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import structlog
@@ -37,6 +38,21 @@ log = structlog.get_logger(__name__)
 #: Telegram's message ceiling, with room left for the header of each chunk.
 _CHUNK_BUDGET = 3_600
 
+#: How many chats' details to fetch per archived round, and the pause between
+#: fetches. ``GetFullChannel`` is one of Telegram's most eagerly rate-limited
+#: calls, so this is bounded and paced rather than "all 500 now" — details are
+#: cached on the chat row, so repeat rounds converge to full coverage.
+_DETAILS_PER_ROUND = 25
+_DETAILS_GAP_S = 0.5
+
+#: Re-learn a chat's details after this long. Bios change; the archive's value
+#: is recognising the group *later*, so a years-old bio serves that less.
+_DETAILS_STALE_DAYS = 30
+
+#: How much of a bio the index carries. Enough to recognise the group, without
+#: one chatty bio swallowing the chunk budget for everyone else's lines.
+_BIO_CHARS = 160
+
 
 async def archive_chat(session: AsyncSession, *, user_id: uuid.UUID) -> TelegramChat | None:
     """The group this customer keeps their copies in, if they chose one."""
@@ -46,18 +62,60 @@ async def archive_chat(session: AsyncSession, *, user_id: uuid.UUID) -> Telegram
     return await session.get(TelegramChat, setting.archive_chat_id)
 
 
-async def _index_lines(session: AsyncSession, *, broadcast_id: uuid.UUID) -> list[str]:
-    """One line per group: where it went, and how to get back to it."""
+async def _delivered(
+    session: AsyncSession, *, broadcast_id: uuid.UUID
+) -> list[tuple[BroadcastTarget, TelegramChat]]:
     result = await session.execute(
         select(BroadcastTarget, TelegramChat)
         .join(TelegramChat, TelegramChat.id == BroadcastTarget.chat_id)
         .where(BroadcastTarget.broadcast_id == broadcast_id)
         .order_by(BroadcastTarget.position)
     )
-    lines: list[str] = []
-    for target, chat in result.all():
-        if target.status is not JobStatus.succeeded:
+    return [(target, chat) for target, chat in result.all() if target.status is JobStatus.succeeded]
+
+
+async def _fill_details(
+    session: AsyncSession,
+    rows: list[tuple[BroadcastTarget, TelegramChat]],
+    adapter: TelegramAdapter,
+) -> None:
+    """Learn the bio and size of private groups the index will name.
+
+    Only groups whose link is not durable: a public group is already findable
+    by its username, but a private one is exactly the group that is hard to
+    find again months later — which is why the operator asked for the bio, "so
+    nothing is lost". Bounded and paced, cached on the chat row, so full
+    coverage arrives over rounds without hammering Telegram's most eagerly
+    rate-limited lookup in one burst.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    stale_before = datetime.now(UTC) - timedelta(days=_DETAILS_STALE_DAYS)
+    fetched = 0
+    for _target, chat in rows:
+        if fetched >= _DETAILS_PER_ROUND:
+            log.info("archive_details_deferred", reason="per-round cap; next round continues")
+            break
+        if chat.username:
             continue
+        if chat.details_synced_at is not None and chat.details_synced_at > stale_before:
+            continue
+        try:
+            details = await adapter.chat_details(chat_repo.to_ref(chat))
+        except Exception as exc:
+            log.warning("archive_details_failed", chat_id=str(chat.id), error=str(exc))
+            continue
+        await chat_repo.set_details(session, chat=chat, details=details)
+        fetched += 1
+        await asyncio.sleep(_DETAILS_GAP_S)
+
+
+def _index_lines(rows: list[tuple[BroadcastTarget, TelegramChat]]) -> list[str]:
+    """One line per group: where it went, how to get back, and — for a private
+    group — what it says about itself, because the title alone will not be
+    enough to recognise it later."""
+    lines: list[str] = []
+    for target, chat in rows:
         link = link_for(
             chat_kind=chat.chat_kind.value,
             peer_id=chat.peer_id,
@@ -65,13 +123,24 @@ async def _index_lines(session: AsyncSession, *, broadcast_id: uuid.UUID) -> lis
             message_id=target.destination_message_id,
         )
         if link.url and link.kind is LinkKind.public:
-            lines.append(f"{chat.title}\n{link.url}")
+            entry = f"{chat.title}\n{link.url}"
         elif link.url:
             # Honest about the catch: this one needs the account to still be a
             # member, which is exactly what an archive cannot assume.
-            lines.append(f"{chat.title}\n{link.url}  (members only)")
+            entry = f"{chat.title}\n{link.url}  (members only)"
         else:
-            lines.append(f"{chat.title}\nno link — Telegram publishes none for this kind of group")
+            entry = f"{chat.title}\nno link — Telegram publishes none for this kind of group"
+
+        if not chat.username:
+            facts = []
+            if chat.description:
+                bio = " ".join(chat.description.split())
+                facts.append(bio[:_BIO_CHARS] + ("…" if len(bio) > _BIO_CHARS else ""))
+            if chat.member_count:
+                facts.append(f"{chat.member_count:,} members")
+            if facts:
+                entry += "\n" + " · ".join(facts)
+        lines.append(entry)
     return lines
 
 
@@ -107,9 +176,11 @@ async def store_round(
     if destination is None:
         return 0
 
-    lines = await _index_lines(session, broadcast_id=broadcast.id)
-    if not lines:
+    rows = await _delivered(session, broadcast_id=broadcast.id)
+    if not rows:
         return 0
+    await _fill_details(session, rows, adapter)
+    lines = _index_lines(rows)
 
     ref: ChatRef = chat_repo.to_ref(destination)
     round_label = f" — round {broadcast.repeat_count}" if broadcast.repeat_every_s else ""

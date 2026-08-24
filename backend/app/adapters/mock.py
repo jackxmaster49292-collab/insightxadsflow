@@ -14,6 +14,7 @@ from app.adapters.base import (
     AccessReport,
     AmbiguousDeliveryError,
     Capabilities,
+    ChatDetails,
     ChatRef,
     ConnectionState,
     DeliveryReceipt,
@@ -55,6 +56,8 @@ class MockScript:
     custom_emoji: dict[str, list[str]] = field(default_factory=dict)
     #: Emoji the account "owns", keyed by the plain emoji they stand in for.
     installed_emoji: dict[str, str] = field(default_factory=dict)
+    #: What each chat says about itself, keyed by peer.
+    chat_details: dict[tuple[str, int], ChatDetails] = field(default_factory=dict)
     #: Errors keyed by method name, raised on the next call to that method.
     #: `delivery_errors` is keyed by destination, which discovery and health
     #: checks do not have — so a test could not script a failure in either.
@@ -135,6 +138,11 @@ class MockAdapter:
         self.script.record("installed_custom_emoji")
         self._maybe_fail("installed_custom_emoji")
         return dict(self.script.installed_emoji)
+
+    async def chat_details(self, ref: ChatRef) -> ChatDetails:
+        self.script.record("chat_details", ref)
+        self._maybe_fail("chat_details")
+        return self.script.chat_details.get(ref.key, ChatDetails())
 
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
         self.script.record("check_destination_access", ref)

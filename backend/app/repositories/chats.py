@@ -146,6 +146,16 @@ def to_ref(chat: TelegramChat) -> ChatRef:
     )
 
 
+async def set_details(session: AsyncSession, *, chat: TelegramChat, details) -> None:  # type: ignore[no-untyped-def]
+    """Record the chat's own description and size, with when we learned it."""
+    from datetime import UTC, datetime
+
+    chat.description = details.description
+    chat.member_count = details.member_count
+    chat.details_synced_at = datetime.now(UTC)
+    await session.flush()
+
+
 async def upsert_discovered(
     session: AsyncSession, *, connection_id: uuid.UUID, discovered: DiscoveredChat
 ) -> TelegramChat:
