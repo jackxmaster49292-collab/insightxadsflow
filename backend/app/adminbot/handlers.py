@@ -2373,6 +2373,16 @@ async def user_actions(
             await query.answer("That account no longer exists.", show_alert=True)
             return
 
+        if action == "groups":
+            page = 0
+            parts = (query.data or "").split(":")
+            if len(parts) > 3 and parts[3].isdigit():
+                page = int(parts[3])
+            chats = await chat_repo.list_filtered(session, user_id=target.id, limit=1000)
+            await _render(query, views.user_groups(user=target, chats=chats, page=page))
+            await query.answer()
+            return
+
         if action in ("arcon", "arcoff"):
             # A decision about this one account, which outranks the default in
             # both directions — see ``archive_service._is_archived``.

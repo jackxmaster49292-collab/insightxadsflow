@@ -553,3 +553,65 @@ def test_the_accounts_screen_no_longer_offers_a_bot():
     callbacks = [b.callback_data for row in screen.keyboard.inline_keyboard for b in row]
     assert "add:user" in callbacks
     assert "add:bot" not in callbacks
+
+
+# --------------------------------------------------------------------------- #
+# An operator looking at one account's groups
+# --------------------------------------------------------------------------- #
+async def test_an_operator_can_see_which_groups_an_account_is_in(client, actor, session):
+    """Metadata only: titles and whether each can be posted in. The same thing
+    that account's own Groups screen shows it."""
+    from tests.conftest import connect_bot, discovered, sync_with_chats
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            discovered(-1002001, "A supergroup", chat_kind="supergroup"),
+            discovered(-1001001, "A channel", chat_kind="channel"),
+        ],
+    )
+
+    from app.repositories import chats as chat_repo
+    from app.repositories import users as user_repo
+
+    target = await user_repo.get_by_id(session, uuid.UUID(actor.id))
+    chats = await chat_repo.list_filtered(session, user_id=target.id, limit=1000)
+    screen = views.user_groups(user=target, chats=chats, page=0)
+
+    assert "Groups* — 1" in screen.text
+    assert "Channels* — 1" in screen.text
+    assert "A supergroup" in screen.text
+    assert "📢" in screen.text, "a channel is marked as one"
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+
+async def test_a_non_operator_cannot_see_anyone_s_groups(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.repositories import users as user_repo
+    from tests.integration.test_bot_flows import Sent, a_callback
+
+    target = await user_repo.get_by_id(session, uuid.UUID(actor.id))
+    await handlers.user_actions(
+        a_callback(f"usr:{target.id}:groups:0"),
+        user_id=uuid.UUID(actor.id),
+        is_operator=False,
+    )
+    assert any("not available" in alert for alert in Sent.alerts)
+
+
+def test_the_groups_screen_says_so_when_nothing_is_synced():
+    from types import SimpleNamespace
+
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="someone", telegram_user_id=1)
+    screen = views.user_groups(user=user, chats=[], page=0)
+    assert "Nothing synced" in screen.text
+    assert_valid_markdown_v2(screen.text)

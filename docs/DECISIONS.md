@@ -1164,6 +1164,20 @@ including rows recording a delivery that actually happened.
 the record of every ad it did receive, which is what the archive index is built
 from. Erasing that to tidy a list would be destroying evidence to save a row.
 
+### ADR-082 — An operator can see which chats an account belongs to
+**Context.** The operator drives this bot from two of their own Telegram
+accounts and wanted to see either one's groups without switching accounts.
+ADR-032 had held the Users screen to counts only.
+**Decision.** 👥 Users → an account → 💭 Their groups lists titles, whether each
+is a group or a channel, and whether the account can post in it. Metadata only:
+no operator can read a message here and that has not changed.
+**Consequence.** This does widen what an operator sees about *other* people —
+group memberships say a good deal about someone — and with the terms gate gone
+(ADR-071) nobody is told. It is a smaller step than the archive already takes,
+which copies every account's ad content to the operator's own group, and the
+same judgement applies: on a single-owner deployment it costs nothing, and on a
+shared one it is one of the things that would need saying.
+
 ---
 
 ## Open tradeoffs

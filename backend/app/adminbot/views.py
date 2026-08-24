@@ -483,7 +483,59 @@ def user_detail(  # type: ignore[no-untyped-def]
 
     return Screen(
         "\n".join(lines),
-        _rows([action], archive_row, default_row, _back("nav:users:0")),
+        _rows(
+            [action],
+            archive_row,
+            default_row,
+            [InlineKeyboardButton(text="💭 Their groups", callback_data=f"usr:{user.id}:groups:0")],
+            _back("nav:users:0"),
+        ),
+    )
+
+
+def user_groups(*, user, chats: Sequence, page: int) -> Screen:  # type: ignore[no-untyped-def,type-arg]
+    """What one account is a member of, for an operator.
+
+    Titles and whether each can be posted in — the same metadata the account's
+    own Groups screen shows it. Not one word of what is said in any of them:
+    an operator has never been able to read a message here and this does not
+    change that.
+    """
+    if not chats:
+        return Screen(
+            f"💭 *{escape(_user_label(user))} — groups*\n\n"
+            "Nothing synced\\. They have either not connected an account or not "
+            "tapped *Sync groups* yet\\.",
+            _rows(_back(f"usr:{user.id}"), _home_row()),
+        )
+
+    groups = [c for c in chats if c.chat_kind.value in ("group", "supergroup")]
+    channels = [c for c in chats if c.chat_kind.value == "channel"]
+    postable = [c for c in chats if c.access and c.access.can_post_destination]
+
+    lines = [
+        f"💭 *{escape(_user_label(user))} — groups*",
+        "",
+        f"*Groups* — {len(groups)}",
+        f"*Channels* — {len(channels)}",
+        f"*Can post in* — {len(postable)}",
+        "",
+    ]
+
+    window, page, pages = _page_of(chats, page, PAGE_SIZE)
+    for chat in window:
+        mark = "📢" if chat.chat_kind.value == "channel" else "💭"
+        can_post = chat.access and chat.access.can_post_destination
+        lines.append(f"{mark} *{escape(chat.title[:40])}*")
+        lines.append(f"   post {'✅' if can_post else '—'}")
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            _pager(f"usr:{user.id}:groups:", page, pages),
+            _back(f"usr:{user.id}"),
+            _home_row(),
+        ),
     )
 
 

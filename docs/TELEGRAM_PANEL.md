@@ -567,3 +567,13 @@ whatever the switch says.
 Operator access itself is *not* granted from the panel. It stays in
 `ADMIN_TELEGRAM_IDS` on the server, because on an open deployment anyone gets
 an account just by messaging the bot.
+
+## Seeing another account's groups (operators)
+
+**👥 Users** → tap an account → **💭 Their groups** lists what that account is a
+member of: group or channel, and whether it can post there. Useful when you
+drive the bot from more than one of your own accounts and do not want to switch
+Telegram accounts to check.
+
+It shows titles and posting rights only. No operator can read a message, an ad
+draft, or an auto-reply through this bot.
