@@ -311,6 +311,39 @@ class UserAdapter:
         ids = getattr(result, "document_id", None) or []
         return [str(document_id) for document_id in ids]
 
+    async def installed_custom_emoji(self) -> dict[str, str]:
+        """Walk the account's own emoji packs, keyed by fallback emoji.
+
+        Far richer than searching one emoticon at a time: every document in a
+        pack carries an ``alt`` — the plain emoji it is drawn in place of — so
+        one pass maps most of a panel at once. Searching returned almost
+        nothing for this account, which is the difference between "what
+        Telegram suggests" and "what you actually own".
+
+        Earlier packs win: Telegram returns them most-recently-used first, so
+        the first hit for an emoji is the one the account reaches for.
+        """
+        await self._ready()
+        from telethon.tl.functions.messages import GetEmojiStickersRequest, GetStickerSetRequest
+        from telethon.tl.types import InputStickerSetID
+
+        found: dict[str, str] = {}
+        packs = await self._client(GetEmojiStickersRequest(hash=0))
+        for pack in getattr(packs, "sets", []) or []:
+            full = await self._client(
+                GetStickerSetRequest(
+                    stickerset=InputStickerSetID(id=pack.id, access_hash=pack.access_hash),
+                    hash=0,
+                )
+            )
+            for document in getattr(full, "documents", []) or []:
+                for attribute in getattr(document, "attributes", []) or []:
+                    alt = getattr(attribute, "alt", None)
+                    if alt:
+                        found.setdefault(alt, str(document.id))
+                        break
+        return found
+
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
         await self._ready()
         try:

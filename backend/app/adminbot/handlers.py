@@ -245,6 +245,28 @@ def _entities_of(message: Message) -> list[dict[str, Any]]:
     ]
 
 
+def _merge_entities(
+    from_message: list[dict[str, Any]],
+    from_markup: list[dict[str, Any]],
+    original: str,
+) -> list[dict[str, Any]]:
+    """Entities Telegram supplied, plus the ones written as markup.
+
+    Telegram's offsets describe the text *as sent*, so they only survive
+    untouched when no markup was rewritten — rewriting shifts every offset
+    after it. Rather than re-deriving offsets that Telegram alone can compute
+    correctly, markup and keyboard-inserted formatting are treated as an
+    either/or: if the message contained markup, its entities win. Mixing the
+    two in one message is the one case this does not serve, and silently
+    misplacing bold text would be worse than not serving it.
+    """
+    if not from_markup:
+        return from_message
+    if premium_icons.CUSTOM_EMOJI_MARKUP.search(original):
+        return from_markup
+    return from_message
+
+
 def _describe(exc: BaseException) -> str:
     """Turn a provider exception into one escaped, customer-facing sentence."""
     from app.adapters.errors import classify_error
@@ -1016,8 +1038,14 @@ async def ad_text(message: Message, user_id: uuid.UUID, state: FSMContext, **_ex
             await _ask(message, "That ad is gone\\. Start again from *Ads*\\.")
             await _go_home(message, user_id)
             return
-        broadcast.body_text = body
-        broadcast.body_entities = _entities_of(message)
+        # Two ways to put a premium emoji in an ad, and both end as the same
+        # stored entities. Inserting the emoji from your own keyboard is the
+        # easy one and needs nothing here. Writing
+        # ``![🔥](tg://emoji?id=123)`` is the other, and it works for ids from
+        # a pack this account does not own — which is the only way to use one
+        # you were simply given.
+        broadcast.body_text, from_markup = premium_icons.parse_entities(body)
+        broadcast.body_entities = _merge_entities(_entities_of(message), from_markup, body)
 
     await state.set_state(None)
     await _send(message, await _compose_screen(user_id, broadcast_id))
@@ -2117,17 +2145,40 @@ def _custom_emoji_pairs(message: Message) -> dict[str, str]:
     return pairs
 
 
+def _typed_emoji_pairs(text: str) -> dict[str, str]:
+    """``🔥 5368324170671202286`` and ``![🔥](tg://emoji?id=…)``, per line.
+
+    Typing the pair is the only route for an id from a pack this account does
+    not own — an id alone cannot say *which* panel icon it replaces, so the
+    plain emoji has to come with it.
+    """
+    pairs: dict[str, str] = {}
+    for line in text.splitlines():
+        for match in premium_icons.CUSTOM_EMOJI_MARKUP.finditer(line):
+            pairs[match.group(1)] = match.group(2)
+        rest = premium_icons.CUSTOM_EMOJI_MARKUP.sub("", line).strip()
+        found = premium_icons.BARE_EMOJI_ID.search(rest)
+        if found:
+            emoticon = rest.replace(found.group(1), "").strip()
+            if emoticon:
+                pairs[emoticon] = found.group(1)
+    return pairs
+
+
 @router.message(IconSetup.collect)
 async def icon_collect(
     message: Message, user_id: uuid.UUID, state: FSMContext, **_extra: Any
 ) -> None:
     pairs = _custom_emoji_pairs(message)
+    pairs.update(_typed_emoji_pairs(message.text or message.caption or ""))
     if not pairs:
         await _ask(
             message,
-            "No premium emoji in that message\\. Pick them from the *animated* "
-            "rows of your emoji keyboard — a plain keyboard emoji carries no "
-            "id\\. Send more, or /cancel\\.",
+            "Nothing usable in that message\\. Two ways to send one:\n\n"
+            "• pick the emoji from the *animated* rows of your keyboard — a "
+            "plain keyboard emoji carries no id\\.\n"
+            "• or type the pair: `🔥 5368324170671202286`\n\n"
+            "Send more, or /cancel\\.",
         )
         return
 
@@ -2200,6 +2251,32 @@ async def button_label(
     default = views.RENAMEABLE_BUTTONS[index]
 
     label = (message.text or "").strip()
+
+    # An id sent here is meant as the button's *icon*, not as its words. Left
+    # in the label it renders as eighteen digits, which is exactly what the
+    # operator saw and reported.
+    icon_id: str | None = None
+    sent_emoji = _custom_emoji_pairs(message)
+    if sent_emoji:
+        emoticon, icon_id = next(iter(sent_emoji.items()))
+        label = label.replace(emoticon, "").strip()
+    else:
+        as_markup = premium_icons.CUSTOM_EMOJI_MARKUP.search(label)
+        bare = premium_icons.BARE_EMOJI_ID.search(label)
+        if as_markup:
+            icon_id = as_markup.group(2)
+            label = premium_icons.CUSTOM_EMOJI_MARKUP.sub("", label).strip()
+        elif bare:
+            icon_id = bare.group(1)
+            label = label.replace(bare.group(1), "").strip()
+
+    if icon_id and not label:
+        await _ask(
+            message,
+            "That is an icon with no words\\. Telegram needs text on a button, "
+            "so send them together — `5368324170671202286 Ads`\\.",
+        )
+        return
     if label != "-" and not (1 <= len(label) <= 32):
         await _ask(message, "Between 1 and 32 characters, or `-` to reset\\.")
         return
@@ -2211,7 +2288,9 @@ async def button_label(
         if label == "-":
             await panel_buttons_repo.reset_label(session, default_text=default)
         else:
-            await panel_buttons_repo.set_label(session, default_text=default, custom_text=label)
+            await panel_buttons_repo.set_label(
+                session, default_text=default, custom_text=label, icon_id=icon_id
+            )
         await event_repo.audit(
             session,
             user_id=user_id,
@@ -2221,7 +2300,8 @@ async def button_label(
             payload={"custom": None if label == "-" else label},
         )
         custom = await panel_buttons_repo.get_map(session)
-    premium_icons.set_labels(custom)
+        icons = await panel_buttons_repo.get_icons(session)
+    premium_icons.set_labels(custom, icons)
 
     await state.clear()
     await _send(

@@ -307,6 +307,10 @@ class BotAdapter:
         # The Bot API has no emoji search. Saying so is better than guessing.
         return []
 
+    async def installed_custom_emoji(self) -> dict[str, str]:
+        # Nor any notion of packs a *bot* owns.
+        return {}
+
     async def send_text(
         self,
         destination: ChatRef,

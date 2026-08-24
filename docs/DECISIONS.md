@@ -736,6 +736,38 @@ best-effort: no operator account, a Telegram failure mid-fetch, or an emoji
 with no premium version each leave the panel plain rather than broken — a
 partial map is the normal outcome, not a failure.
 
+### ADR-055 — A custom-emoji id is accepted as input, everywhere text is
+**Context.** Automatic extraction found 1 icon of 43 on a real account, and the
+operator had ids in hand but no way to use them: pasted into a button label the
+digits rendered as digits, and there was no way to put a given id into an ad at
+all.
+**Decision.** Ids are accepted in three places, all sharing one parser.
+``![🔥](tg://emoji?id=N)`` — Telegram's own MarkdownV2 spelling — is parsed into
+real entities wherever text is taken, with offsets in **UTF-16 code units**
+because that is Telegram's unit and an emoji is a surrogate pair there. The
+icon collector also takes typed ``<emoji> <id>`` pairs, since an id alone
+cannot say which panel icon it replaces. Renaming a button treats an id as the
+button's ``icon_custom_emoji_id`` — a separate column, because Telegram draws
+it from a separate field — and refuses an icon with no words, which Telegram
+would reject anyway.
+**Consequence.** A bare id is only read as one at 15-20 digits. Prices, counts
+and years in an ad stay text, which the ``$ 0.5`` and ``2026`` cases pin down.
+An icon chosen by hand for one button beats the automatic emoji-to-icon pass.
+Markup and keyboard-inserted formatting in the *same* message are an either/or:
+rewriting markup shifts every later offset, and silently misplacing bold text
+would be worse than not serving that combination.
+
+### ADR-056 — Icons come from the account's own packs first
+**Context.** ``messages.searchCustomEmoji`` returned 1 of 43 icons on a live
+account. It surfaces what Telegram *suggests*, which is sparse.
+**Decision.** ``installed_custom_emoji()`` walks the account's installed emoji
+packs (``messages.getEmojiStickers`` then ``getStickerSet``) and keys every
+document by its ``alt`` — the plain emoji it is drawn in place of. One pass
+covers most of a panel. Only what the packs miss is then searched one emoticon
+at a time, at the old pace.
+**Consequence.** The Bot API has neither call, so ``BotAdapter`` returns empty
+for both and says so. A partial map remains the normal outcome.
+
 ---
 
 ## Open tradeoffs

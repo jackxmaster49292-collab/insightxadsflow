@@ -218,6 +218,16 @@ class TelegramAdapter(Protocol):
         """
         ...
 
+    async def installed_custom_emoji(self) -> dict[str, str]:
+        """Every custom emoji this account owns, keyed by its fallback emoji.
+
+        A different and much richer source than searching one emoticon at a
+        time: each document in an installed emoji pack carries the plain emoji
+        it stands in for, so one pass over the packs maps most of a panel at
+        once. Empty when the provider cannot read packs.
+        """
+        ...
+
     def receive_new_messages(self) -> AsyncIterator[InboundMessage]: ...
 
     async def forward_message(

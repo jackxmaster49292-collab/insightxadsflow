@@ -938,6 +938,10 @@ class PanelButton(Base):
 
     default_text: Mapped[str] = mapped_column(String(64), primary_key=True)
     custom_text: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: A custom emoji drawn before the label. Separate from ``custom_text``
+    #: because Telegram draws it from its own field: pasted into the text it
+    #: would render as the digits of the id.
+    icon_custom_emoji_id: Mapped[str | None] = mapped_column(String(32))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

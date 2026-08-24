@@ -341,7 +341,8 @@ async def test_a_plain_emoji_message_is_explained_not_saved(client, actor, state
     await handlers.icon_collect(a_message("🔥 ✅"), user_id=uuid.UUID(actor.id), state=state)
 
     assert await panel_emoji_repo.get_map(session) == {}
-    assert "No premium emoji" in Sent.last()
+    assert "Nothing usable" in Sent.last()
+    assert "type the pair" in Sent.last(), "and the other way in"
 
 
 # --------------------------------------------------------------------------- #
@@ -563,3 +564,207 @@ async def test_an_emoji_telegram_has_no_premium_version_of_stays_plain(
     stored = await panel_emoji_repo.get_map(session)
     assert stored == {"🔥": "12345"}
     assert premium_icons.apply("🔥 and ✅") == "![🔥](tg://emoji?id=12345) and ✅"
+
+
+# --------------------------------------------------------------------------- #
+# Using an id you were simply given
+# --------------------------------------------------------------------------- #
+def test_markup_becomes_real_entities_at_true_utf16_offsets():
+    """The whole point of accepting ids: a pack this account does not own can
+    still be used. Offsets are UTF-16 — an emoji is a surrogate pair there, so
+    counting characters would misplace every entity after the first."""
+    text, entities = premium_icons.parse_entities(
+        "Sale ![🔥](tg://emoji?id=111) now ![✅](tg://emoji?id=222) end"
+    )
+
+    assert text == "Sale 🔥 now ✅ end"
+    raw = text.encode("utf-16-le")
+    for entity, expected in zip(entities, ["🔥", "✅"], strict=True):
+        sliced = raw[entity["offset"] * 2 : (entity["offset"] + entity["length"]) * 2]
+        assert sliced.decode("utf-16-le") == expected
+    assert [e["custom_emoji_id"] for e in entities] == ["111", "222"]
+
+
+def test_text_without_markup_is_untouched():
+    text, entities = premium_icons.parse_entities("Just a sale 🔥 today")
+    assert text == "Just a sale 🔥 today"
+    assert entities == []
+
+
+async def test_an_ad_can_carry_an_id_written_by_hand(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.db.models import Broadcast
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    await connect_bot(actor)
+    await handlers.ad_new(a_callback("ad:new"), state=state)
+    await handlers.ad_name(a_message("Sale"), user_id=uuid.UUID(actor.id), state=state)
+    await handlers.ad_text(
+        a_message("Big sale ![🔥](tg://emoji?id=5368324170671202286) today"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+    )
+
+    from sqlalchemy import select
+
+    broadcast = (await session.execute(select(Broadcast))).scalar_one()
+    await session.refresh(broadcast)
+    assert broadcast.body_text == "Big sale 🔥 today"
+    assert broadcast.body_entities == [
+        {
+            "type": "custom_emoji",
+            "offset": 9,
+            "length": 2,
+            "custom_emoji_id": "5368324170671202286",
+        }
+    ]
+
+
+def test_a_typed_pair_is_read_as_an_icon():
+    from app.adminbot.handlers import _typed_emoji_pairs
+
+    assert _typed_emoji_pairs("🔥 5368324170671202286") == {"🔥": "5368324170671202286"}
+    assert _typed_emoji_pairs("![✅](tg://emoji?id=777)") == {"✅": "777"}
+    assert _typed_emoji_pairs("🔥 111\n✅ 5368324170671202286") == {"✅": "5368324170671202286"}, (
+        "111 is too short to be a Telegram document id"
+    )
+
+
+def test_ordinary_numbers_in_text_are_not_read_as_ids():
+    """An ad full of prices and years must not have them silently turned into
+    emoji ids."""
+    from app.adminbot.handlers import _typed_emoji_pairs
+
+    assert _typed_emoji_pairs("Netflix 4K — 1 Month — $ 0.5") == {}
+    assert _typed_emoji_pairs("2026") == {}
+    _, entities = premium_icons.parse_entities("Gemini Pro 18 Months — only $ 0.5")
+    assert entities == []
+
+
+async def test_sending_an_id_to_the_collector_maps_it(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.adminbot.states import IconSetup
+    from app.repositories import panel_emoji as panel_emoji_repo
+    from tests.integration.test_bot_flows import a_message
+
+    await state.set_state(IconSetup.collect)
+    await handlers.icon_collect(
+        a_message("🔥 5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_emoji_repo.get_map(session) == {"🔥": "5368324170671202286"}
+
+
+# --------------------------------------------------------------------------- #
+# A button icon is a field, not eighteen digits of label
+# --------------------------------------------------------------------------- #
+async def test_an_id_sent_while_renaming_becomes_the_icon(client, actor, state, session):
+    """Pasted into the label it rendered as the digits of the id — which is
+    what the operator saw and reported."""
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:pick:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_label(
+        a_message("5368324170671202286 Ads"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_buttons_repo.get_map(session) == {"📣 Ads": "Ads"}
+    assert await panel_buttons_repo.get_icons(session) == {"📣 Ads": "5368324170671202286"}
+
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    button = premium_icons.apply_labels(markup).inline_keyboard[0][0]
+    assert button.text == "Ads", "digits do not belong in the words"
+    assert button.icon_custom_emoji_id == "5368324170671202286"
+
+
+async def test_an_icon_with_no_words_is_refused(client, actor, state, session):
+    """Telegram requires text on a button; an id alone would produce one that
+    cannot be sent at all."""
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback, a_message
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:pick:{index}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+    await handlers.button_label(
+        a_message("5368324170671202286"), user_id=uuid.UUID(actor.id), state=state
+    )
+
+    assert await panel_buttons_repo.get_map(session) == {}
+    assert "icon with no words" in Sent.last()
+
+
+def test_an_explicit_button_icon_beats_the_automatic_one():
+    """A choice made by hand for one button must not be overwritten by the
+    pass that infers icons from leading emoji."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_map({"📣": "automatic"})
+    premium_icons.set_labels({"📣 Ads": "Ads"}, {"📣 Ads": "chosen"})
+
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    final = premium_icons.apply_keyboard(premium_icons.apply_labels(markup))
+    button = final.inline_keyboard[0][0]
+    assert button.icon_custom_emoji_id == "chosen"
+    assert button.text == "Ads"
+
+
+# --------------------------------------------------------------------------- #
+# Where the icons come from
+# --------------------------------------------------------------------------- #
+async def test_the_accounts_own_packs_are_preferred_over_searching(
+    client, actor, session, monkeypatch
+):
+    """Searching returned 1 icon of 43 on a real account: it surfaces what
+    Telegram suggests, while the packs are what the account actually has."""
+    from app.adminbot import icon_setup
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script = script_for(connection.id)
+    script.installed_emoji = {emoticon: f"pack-{i}" for i, emoticon in enumerate(views.PANEL_EMOJI)}
+    script.custom_emoji = {"🔥": ["searched"]}
+
+    found = await icon_setup.fetch_icons(await _adapter_for(session, connection))
+
+    assert len(found) == len(views.PANEL_EMOJI)
+    assert found["🔥"] == script.installed_emoji["🔥"], "owned beats suggested"
+    assert script.calls_to("custom_emoji_ids") == [], "nothing left to search for"
+
+
+async def test_search_still_covers_what_the_packs_miss(client, actor, session, monkeypatch):
+    from app.adminbot import icon_setup
+
+    connection = await _operator_account(session, actor, monkeypatch)
+    script = script_for(connection.id)
+    script.installed_emoji = {"🔥": "owned"}
+    script.custom_emoji = {"✅": ["searched"]}
+
+    found = await icon_setup.fetch_icons(await _adapter_for(session, connection))
+
+    assert found["🔥"] == "owned"
+    assert found["✅"] == "searched"
+
+
+async def _adapter_for(session, connection):
+    from app.services import connections as connection_service
+
+    return await connection_service.adapter_for(session, connection)

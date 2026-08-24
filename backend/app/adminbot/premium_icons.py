@@ -31,6 +31,9 @@ _suspended = False
 
 #: Operator-customized button labels, keyed by the built-in default text.
 _labels: dict[str, str] = {}
+#: Icons chosen explicitly for one button, keyed the same way. A deliberate
+#: choice, so it beats whatever the emoji-to-icon pass would infer.
+_button_icons: dict[str, str] = {}
 
 #: One custom-emoji token, for stripping a rejected message back to plain.
 _TOKEN = re.compile(r"!\[([^\]]+)\]\(tg://emoji\?id=\d+\)")
@@ -95,10 +98,65 @@ def strip(text: str) -> str:
     return _TOKEN.sub(r"\1", text)
 
 
-def set_labels(mapping: dict[str, str]) -> None:
+#: ``![🔥](tg://emoji?id=123)`` — Telegram's own MarkdownV2 spelling for an
+#: inline custom emoji. Accepted as *input* wherever text is taken, so an id
+#: from anywhere can be used without owning the pack.
+CUSTOM_EMOJI_MARKUP = re.compile(r"!\[([^\]]+)\]\(tg://emoji\?id=(\d+)\)")
+
+#: A bare custom-emoji document id. Telegram's are 18-19 digits; anything
+#: shorter is far more likely to be a price, a count or a year, and reading
+#: those as emoji ids would silently mangle ordinary text.
+BARE_EMOJI_ID = re.compile(r"\b(\d{15,20})\b")
+
+
+def parse_entities(text: str) -> tuple[str, list[dict[str, object]]]:
+    """Turn ``![🔥](tg://emoji?id=N)`` markup into text plus real entities.
+
+    Returns the text with each token replaced by its fallback emoji, and the
+    entities describing where the custom emoji go. Offsets are counted in
+    **UTF-16 code units**, which is Telegram's unit and not Python's: an emoji
+    is a surrogate pair there, so counting characters would place every entity
+    after the first one wrongly.
+    """
+    out: list[str] = []
+    entities: list[dict[str, object]] = []
+    units = 0  # UTF-16 code units written so far
+    cursor = 0
+
+    for match in CUSTOM_EMOJI_MARKUP.finditer(text):
+        plain = text[cursor : match.start()]
+        out.append(plain)
+        units += len(plain.encode("utf-16-le")) // 2
+
+        fallback = match.group(1)
+        length = len(fallback.encode("utf-16-le")) // 2
+        entities.append(
+            {
+                "type": "custom_emoji",
+                "offset": units,
+                "length": length,
+                "custom_emoji_id": match.group(2),
+            }
+        )
+        out.append(fallback)
+        units += length
+        cursor = match.end()
+
+    out.append(text[cursor:])
+    return "".join(out), entities
+
+
+def set_labels(mapping: dict[str, str], icons: dict[str, str] | None = None) -> None:
     with _lock:
         _labels.clear()
         _labels.update(mapping)
+        _button_icons.clear()
+        _button_icons.update(icons or {})
+
+
+def get_button_icons() -> dict[str, str]:
+    with _lock:
+        return dict(_button_icons)
 
 
 def get_labels() -> dict[str, str]:
@@ -115,24 +173,29 @@ def apply_labels(markup: Any) -> Any:
     transformed one. Custom labels are plain text straight from the database;
     there is no failure mode to fall back from.
     """
-    if markup is None or not _labels:
+    if markup is None or not (_labels or _button_icons):
         return markup
     from aiogram.types import InlineKeyboardMarkup
 
     with _lock:
         labels = dict(_labels)
+        icons = dict(_button_icons)
 
     changed = False
     rows = []
     for row in markup.inline_keyboard:
         buttons = []
         for button in row:
-            custom = labels.get(button.text)
-            if custom is None:
+            update: dict[str, str] = {}
+            if button.text in labels:
+                update["text"] = labels[button.text]
+            if button.text in icons:
+                update["icon_custom_emoji_id"] = icons[button.text]
+            if not update:
                 buttons.append(button)
                 continue
             changed = True
-            buttons.append(button.model_copy(update={"text": custom}))
+            buttons.append(button.model_copy(update=update))
         rows.append(buttons)
     if not changed:
         return markup
@@ -169,6 +232,10 @@ def apply_keyboard(markup: Any) -> Any:
                 None,
             )
             remainder = button.text[len(emoticon) :].strip() if emoticon else ""
+            if button.icon_custom_emoji_id is not None:
+                # Already carries an icon an operator chose by hand.
+                buttons.append(button)
+                continue
             if emoticon is None or not remainder:
                 # No mapped emoji, or nothing but the emoji: a button must keep
                 # visible text, so it stays exactly as designed.

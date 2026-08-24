@@ -129,7 +129,10 @@ async def run() -> None:
         # the first screen renders so the panel does not flicker plain→premium.
         async with session_scope() as session:
             premium_icons.set_map(await panel_emoji_repo.get_map(session))
-            premium_icons.set_labels(await panel_buttons_repo.get_map(session))
+            premium_icons.set_labels(
+                await panel_buttons_repo.get_map(session),
+                await panel_buttons_repo.get_icons(session),
+            )
 
         await _register_commands(bot)
         await _publish_profile(bot)

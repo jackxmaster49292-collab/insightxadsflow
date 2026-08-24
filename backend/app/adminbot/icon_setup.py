@@ -32,13 +32,30 @@ _SEARCH_GAP_S = 0.1
 
 
 async def fetch_icons(adapter: TelegramAdapter) -> dict[str, str]:
-    """Ask Telegram for a custom emoji matching each icon the panel draws.
+    """Find a custom emoji for each icon the panel draws.
 
-    An emoji Telegram has no premium version of is simply left out, and stays
-    plain — a partial map is the normal outcome, not a failure.
+    Two sources, cheapest and richest first. The account's **own packs** are
+    read in one pass and cover most of a panel, because every document in a
+    pack carries the plain emoji it stands in for. Only what that misses is
+    then *searched* one emoticon at a time — which is what ran before, and on
+    a real account returned 1 icon out of 43: searching surfaces what Telegram
+    suggests, while the packs are what the account actually has.
+
+    An emoji with no premium version anywhere is left out and stays plain. A
+    partial map is the normal outcome, not a failure.
     """
     found: dict[str, str] = {}
+
+    owned = await adapter.installed_custom_emoji()
     for emoticon in views.PANEL_EMOJI:
+        for candidate in (emoticon, emoticon.rstrip("️")):
+            if candidate in owned:
+                found[emoticon] = owned[candidate]
+                break
+
+    for emoticon in views.PANEL_EMOJI:
+        if emoticon in found:
+            continue
         ids = await adapter.custom_emoji_ids(emoticon)
         if not ids and emoticon.endswith("️"):
             # Some emoji are indexed without their variation selector.
