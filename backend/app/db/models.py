@@ -974,6 +974,11 @@ class PanelButton(Base):
     #: because Telegram draws it from its own field: pasted into the text it
     #: would render as the digits of the id.
     icon_custom_emoji_id: Mapped[str | None] = mapped_column(String(32))
+    #: Telegram's button colour: ``danger`` (red), ``success`` (green) or
+    #: ``primary`` (blue). NULL leaves the app's own styling, which is what
+    #: every button had before and still the right default for most of them —
+    #: colour means something only when it is rare.
+    style: Mapped[str | None] = mapped_column(String(16))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

@@ -19,6 +19,7 @@ from tests.integration.test_bot_flows import (
     ADMIN_CHAT,
     Sent,
     a_callback,
+    assert_keyboard_is_sendable,
     assert_valid_markdown_v2,
 )
 
@@ -876,3 +877,137 @@ def test_the_screen_says_so_when_nothing_is_missing():
     assert "Every icon has one" in screen.text
     assert "No premium version" not in screen.text
     assert_valid_markdown_v2(screen.text)
+
+
+# --------------------------------------------------------------------------- #
+# The library, and button colour
+# --------------------------------------------------------------------------- #
+def test_the_library_shows_every_id_in_a_copyable_form():
+    """The ids are the point: an operator who wants one inside an ad needs the
+    number itself, and hunting for it through Telegram is the work this saves."""
+    screen = views.emoji_library(
+        extracted={"🔥": "5368324170671202286", "✅": "5215596888476929952"}, page=0
+    )
+
+    assert "`5368324170671202286`" in screen.text, "monospace, so a tap copies it"
+    assert "🔥" in screen.text and "✅" in screen.text
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+
+def test_an_empty_library_says_how_to_fill_it():
+    screen = views.emoji_library(extracted={}, page=0)
+    assert "Nothing saved yet" in screen.text
+    assert "op:emoji:send" in [
+        b.callback_data for row in screen.keyboard.inline_keyboard for b in row
+    ]
+    assert_valid_markdown_v2(screen.text)
+
+
+async def test_a_button_can_be_given_one_of_telegrams_three_colours(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    green = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v == "success")
+
+    await handlers.op_buttons(
+        a_callback(f"op:btn:sty:{index}:{green}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    assert await panel_buttons_repo.get_styles(session) == {"📣 Ads": "success"}
+    assert premium_icons.get_styles() == {"📣 Ads": "success"}
+
+
+def test_the_colour_reaches_the_button():
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    premium_icons.set_labels({}, {}, {"📣 Ads": "success"})
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")]]
+    )
+    button = premium_icons.apply_labels(markup).inline_keyboard[0][0]
+
+    assert button.style == "success"
+    assert button.text == "📣 Ads", "colour alone changes nothing else"
+    premium_icons.set_labels({})
+
+
+async def test_a_colour_can_be_taken_back_off(client, actor, state, session):
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    red = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v == "danger")
+    plain = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v is None)
+
+    for choice in (red, plain):
+        await handlers.op_buttons(
+            a_callback(f"op:btn:sty:{index}:{choice}"),
+            user_id=uuid.UUID(actor.id),
+            state=state,
+            is_operator=True,
+        )
+
+    assert await panel_buttons_repo.get_styles(session) == {}, "back to Telegram's own"
+
+
+async def test_colouring_a_button_does_not_rename_it(client, actor, state, session):
+    """A colour with no rename still needs a row, and the label it carries must
+    be the built-in one so nothing appears to change."""
+    from app.adminbot import handlers
+    from app.repositories import panel_buttons as panel_buttons_repo
+    from tests.integration.test_bot_flows import a_callback
+
+    index = views.RENAMEABLE_BUTTONS.index("🚀 Send now")
+    blue = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v == "primary")
+
+    await handlers.op_buttons(
+        a_callback(f"op:btn:sty:{index}:{blue}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    labels = await panel_buttons_repo.get_map(session)
+    assert labels["🚀 Send now"] == "🚀 Send now", "unchanged label"
+
+
+def test_the_picker_shows_each_choice_in_its_own_colour():
+    """The only honest preview of a thing whose whole purpose is how it looks."""
+    screen = views.button_style_picker(default_text="📣 Ads", index=0, current="success")
+
+    styles = [b.style for row in screen.keyboard.inline_keyboard for b in row]
+    assert "primary" in styles and "success" in styles and "danger" in styles
+    assert "• 🟢 Green" in " ".join(
+        b.text for row in screen.keyboard.inline_keyboard for b in row
+    ), "and marks the current one"
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+
+async def test_a_colour_survives_a_restart(client, actor, state, session):
+    """The whole point of the table: a redeploy must not fall back to plain."""
+    from app.adminbot import handlers
+    from tests.integration.test_bot_flows import a_callback
+
+    index = views.RENAMEABLE_BUTTONS.index("📣 Ads")
+    green = next(i for i, (_l, v) in enumerate(views.BUTTON_STYLES) if v == "success")
+    await handlers.op_buttons(
+        a_callback(f"op:btn:sty:{index}:{green}"),
+        user_id=uuid.UUID(actor.id),
+        state=state,
+        is_operator=True,
+    )
+
+    # Everything in memory is lost, as it would be on a redeploy.
+    premium_icons.set_labels({}, {}, {})
+    assert premium_icons.get_styles() == {}
+
+    await handlers._reload_button_look(session)
+    assert premium_icons.get_styles() == {"📣 Ads": "success"}

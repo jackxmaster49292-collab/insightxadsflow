@@ -304,6 +304,9 @@ def premium_icons_status(
         "\n".join(lines),
         _rows(
             [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
+            [InlineKeyboardButton(text="🎨 Library", callback_data="op:emoji:lib:0")]
+            if extracted
+            else [],
             [
                 InlineKeyboardButton(
                     text="🔁 Extract again" if extracted else "✨ Extract via account",
@@ -354,6 +357,98 @@ RENAMEABLE_BUTTONS: tuple[str, ...] = (
 BUTTONS_PAGE_SIZE = 8
 
 
+def emoji_library(*, extracted: dict[str, str], page: int) -> Screen:
+    """Every saved emoji with its id, in a form that can be copied.
+
+    The ids are the point. An operator who wants one inside an ad, or on a
+    button this panel does not own, needs the number itself — and hunting for
+    it through Telegram is exactly the work this screen exists to save.
+    """
+    if not extracted:
+        return Screen(
+            "🎨 *Emoji library*\n\nNothing saved yet\\.\n\n"
+            "Send me a message containing premium emoji and I will read their "
+            "ids off it\\.",
+            _rows(
+                [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
+                _back("op:emoji"),
+            ),
+        )
+
+    items = sorted(extracted.items())
+    window, page, pages = _page_of(items, page, PAGE_SIZE)
+
+    lines = [
+        f"🎨 *Emoji library* \\({len(items)}\\)",
+        "",
+        "Tap and hold a line to copy its id\\.",
+        "",
+    ]
+    for emoticon, custom_id in window:
+        lines.append(f"{emoticon} `{escape(custom_id)}`")
+
+    lines += [
+        "",
+        "*In an ad* — send the premium emoji straight from your keyboard, or "
+        "write the markup form with one of these ids\\.",
+        "",
+        "_Telegram's HTML spelling means the same thing; this panel speaks "
+        "MarkdownV2, so it takes that form\\._",
+    ]
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            _pager("op:emoji:lib:", page, pages),
+            [InlineKeyboardButton(text="📥 Send emojis", callback_data="op:emoji:send")],
+            _back("op:emoji"),
+        ),
+    )
+
+
+#: Telegram's three colours, and its own default. Indexed by the callback, so
+#: this tuple is append-only.
+BUTTON_STYLES: tuple[tuple[str, str | None], ...] = (
+    ("⬜ Default", None),
+    ("🔵 Blue", "primary"),
+    ("🟢 Green", "success"),
+    ("🔴 Red", "danger"),
+)
+
+
+def button_style_picker(*, default_text: str, index: int, current: str | None) -> Screen:
+    """The colour for one button.
+
+    Telegram offers exactly three plus its own default, so this is a fixed list
+    rather than anything to type. Each choice is *shown* in its own colour —
+    the only honest preview of a thing whose whole purpose is how it looks.
+    """
+    naming = {value: label for label, value in BUTTON_STYLES}
+    lines = [
+        f"🎨 *Colour for {escape(default_text)}*",
+        "",
+        f"*Now* — {escape(naming[current])}",
+        "",
+        "_Worth using sparingly: three coloured buttons in a row of six read as three warnings\\._",
+    ]
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *[
+                [
+                    InlineKeyboardButton(
+                        text=f"{'• ' if value == current else ''}{label}",
+                        callback_data=f"op:btn:sty:{index}:{i}",
+                        style=value,
+                    )
+                ]
+                for i, (label, value) in enumerate(BUTTON_STYLES)
+            ],
+            _back("op:btn:0"),
+        ),
+    )
+
+
 def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
     """Every renameable button, with its current label beside the default."""
     window, page, pages = _page_of(RENAMEABLE_BUTTONS, page, BUTTONS_PAGE_SIZE)
@@ -372,7 +467,10 @@ def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
         current = custom.get(default)
         shown = f"{default} → {current}" if current else default
         rows.append(
-            [InlineKeyboardButton(text=shown[:56], callback_data=f"op:btn:pick:{offset + i}")]
+            [
+                InlineKeyboardButton(text=shown[:46], callback_data=f"op:btn:pick:{offset + i}"),
+                InlineKeyboardButton(text="🎨", callback_data=f"op:btn:col:{offset + i}"),
+            ]
         )
     if custom:
         lines.append(f"*Renamed* — {len(custom)}")

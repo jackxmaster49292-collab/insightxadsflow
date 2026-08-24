@@ -254,12 +254,18 @@ from this chat — Telegram burns any login code it sees an account send — but
 sending emoji is just a message.) The account-search path still exists for
 operators who do have a connected account.
 
-### Renaming buttons (operators)
+### Renaming and colouring buttons (operators)
 
-**🔤 Buttons** on the operator home lists every renameable button label. Tap
-one, send the new text (up to 32 characters, one line), and it changes
-everywhere that button appears — stored in the database, surviving restarts.
-Send `-` while renaming to go back to the built-in label.
+**🔤 Buttons** on the operator home lists every renameable button. Tap the name
+to rename it — send the new text (up to 32 characters, one line) and it changes
+everywhere that button appears. Send `-` to go back to the built-in label. Send
+a custom-emoji id, or a premium emoji, and it becomes the button's icon.
+
+Tap **🎨** beside a button for its colour. Telegram offers three — blue, green
+and red — plus its own default. Each choice is shown in its own colour. Worth
+using sparingly: three coloured buttons in a row of six read as three warnings.
+
+Labels, icons and colours all live in the database, so a redeploy keeps them.
 
 ### Starting later
 
@@ -602,3 +608,13 @@ what this screen is for.
 
 It shows titles, links and posting rights only. No operator can read a message,
 an ad draft, or an auto-reply through this bot.
+
+## The emoji library (operators)
+
+**✨ Icons → 🎨 Library** lists every saved emoji with its id in monospace — tap
+and hold to copy one. Useful when you want an id for an ad, or for something
+outside this panel.
+
+Two spellings mean the same thing to Telegram: `![🔥](tg://emoji?id=…)`, which
+this panel reads, and `<tg-emoji emoji-id="…">🔥</tg-emoji>`, which is the HTML
+form other tools use.

@@ -13,6 +13,23 @@ async def get_map(session: AsyncSession) -> dict[str, str]:
     return {row.default_text: row.custom_text for row in result.scalars().all()}
 
 
+async def get_styles(session: AsyncSession) -> dict[str, str]:
+    """Button colours an operator chose, keyed by default text."""
+    result = await session.execute(select(PanelButton))
+    return {row.default_text: row.style for row in result.scalars().all() if row.style}
+
+
+async def set_style(session: AsyncSession, *, default_text: str, style: str | None) -> None:
+    row = await session.get(PanelButton, default_text)
+    if row is None:
+        # A colour with no rename still needs a row, and the label it carries
+        # is the built-in one so nothing appears to change.
+        row = PanelButton(default_text=default_text, custom_text=default_text)
+        session.add(row)
+    row.style = style
+    await session.flush()
+
+
 async def get_icons(session: AsyncSession) -> dict[str, str]:
     """Custom-emoji ids an operator set explicitly, keyed by default text.
 

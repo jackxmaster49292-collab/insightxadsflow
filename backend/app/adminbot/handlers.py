@@ -2153,6 +2153,17 @@ async def op_emoji(
         await query.answer()
         return
 
+    if action == "lib":
+        page = 0
+        parts = (query.data or "").split(":")
+        if len(parts) > 3 and parts[3].isdigit():
+            page = int(parts[3])
+        async with session_scope() as session:
+            extracted = await panel_emoji_repo.get_map(session)
+        await _render(query, views.emoji_library(extracted=extracted, page=page))
+        await query.answer()
+        return
+
     if action == "run":
         # Inline rather than queued, like the sign-in flow: a burst of small
         # searches through the operator's own connection, with the operator
@@ -2271,6 +2282,19 @@ async def icon_collect(
     )
 
 
+async def _reload_button_look(session) -> None:  # type: ignore[no-untyped-def]
+    """Push labels, icons and colours into the renderer together.
+
+    One call, because they are one thing from the screen's point of view and
+    three separate loads is three chances to reload two of them.
+    """
+    premium_icons.set_labels(
+        await panel_buttons_repo.get_map(session),
+        await panel_buttons_repo.get_icons(session),
+        await panel_buttons_repo.get_styles(session),
+    )
+
+
 @router.callback_query(F.data.startswith("op:btn"))
 async def op_buttons(
     query: CallbackQuery,
@@ -2299,6 +2323,54 @@ async def op_buttons(
                 "Send `-` for the built\\-in label\\.",
             )
         await query.answer()
+        return
+
+    if len(parts) >= 4 and parts[2] == "col" and parts[3].isdigit():
+        index = int(parts[3])
+        if index >= len(views.RENAMEABLE_BUTTONS):
+            await query.answer("Unknown button.", show_alert=True)
+            return
+        default = views.RENAMEABLE_BUTTONS[index]
+        async with session_scope() as session:
+            styles = await panel_buttons_repo.get_styles(session)
+        await _render(
+            query,
+            views.button_style_picker(
+                default_text=default, index=index, current=styles.get(default)
+            ),
+        )
+        await query.answer()
+        return
+
+    if len(parts) >= 5 and parts[2] == "sty":
+        index = int(parts[3]) if parts[3].isdigit() else -1
+        choice = int(parts[4]) if parts[4].isdigit() else -1
+        if not (0 <= index < len(views.RENAMEABLE_BUTTONS)) or not (
+            0 <= choice < len(views.BUTTON_STYLES)
+        ):
+            await query.answer("Unknown colour.", show_alert=True)
+            return
+        default = views.RENAMEABLE_BUTTONS[index]
+        label, value = views.BUTTON_STYLES[choice]
+        async with session_scope() as session:
+            await panel_buttons_repo.set_style(session, default_text=default, style=value)
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="panel_button.style",
+                object_type="panel_button",
+                object_id=default,
+                payload={"style": value},
+            )
+            await _reload_button_look(session)
+            styles = await panel_buttons_repo.get_styles(session)
+        await _render(
+            query,
+            views.button_style_picker(
+                default_text=default, index=index, current=styles.get(default)
+            ),
+        )
+        await query.answer(label)
         return
 
     page = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
@@ -2369,9 +2441,8 @@ async def button_label(
             object_id=default,
             payload={"custom": None if label == "-" else label},
         )
+        await _reload_button_look(session)
         custom = await panel_buttons_repo.get_map(session)
-        icons = await panel_buttons_repo.get_icons(session)
-    premium_icons.set_labels(custom, icons)
 
     await state.clear()
     await _send(

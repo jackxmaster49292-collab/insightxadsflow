@@ -34,6 +34,8 @@ _labels: dict[str, str] = {}
 #: Icons chosen explicitly for one button, keyed the same way. A deliberate
 #: choice, so it beats whatever the emoji-to-icon pass would infer.
 _button_icons: dict[str, str] = {}
+#: Button colours, same key again.
+_button_styles: dict[str, str] = {}
 
 #: One custom-emoji token, for stripping a rejected message back to plain.
 _TOKEN = re.compile(r"!\[([^\]]+)\]\(tg://emoji\?id=\d+\)")
@@ -146,12 +148,23 @@ def parse_entities(text: str) -> tuple[str, list[dict[str, object]]]:
     return "".join(out), entities
 
 
-def set_labels(mapping: dict[str, str], icons: dict[str, str] | None = None) -> None:
+def set_labels(
+    mapping: dict[str, str],
+    icons: dict[str, str] | None = None,
+    styles: dict[str, str] | None = None,
+) -> None:
     with _lock:
         _labels.clear()
         _labels.update(mapping)
         _button_icons.clear()
         _button_icons.update(icons or {})
+        _button_styles.clear()
+        _button_styles.update(styles or {})
+
+
+def get_styles() -> dict[str, str]:
+    with _lock:
+        return dict(_button_styles)
 
 
 def get_button_icons() -> dict[str, str]:
@@ -173,13 +186,14 @@ def apply_labels(markup: Any) -> Any:
     transformed one. Custom labels are plain text straight from the database;
     there is no failure mode to fall back from.
     """
-    if markup is None or not (_labels or _button_icons):
+    if markup is None or not (_labels or _button_icons or _button_styles):
         return markup
     from aiogram.types import InlineKeyboardMarkup
 
     with _lock:
         labels = dict(_labels)
         icons = dict(_button_icons)
+        styles = dict(_button_styles)
 
     changed = False
     rows = []
@@ -191,6 +205,8 @@ def apply_labels(markup: Any) -> Any:
                 update["text"] = labels[button.text]
             if button.text in icons:
                 update["icon_custom_emoji_id"] = icons[button.text]
+            if button.text in styles:
+                update["style"] = styles[button.text]
             if not update:
                 buttons.append(button)
                 continue

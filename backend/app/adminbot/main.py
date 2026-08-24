@@ -132,6 +132,7 @@ async def run() -> None:
             premium_icons.set_labels(
                 await panel_buttons_repo.get_map(session),
                 await panel_buttons_repo.get_icons(session),
+                await panel_buttons_repo.get_styles(session),
             )
 
         await _register_commands(bot)

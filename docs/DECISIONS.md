@@ -1230,6 +1230,32 @@ one copyable line, above the instructions for sending a replacement pair.
 ``<emoji> <id>`` and disappears from it. When it empties the screen says so
 rather than showing an empty heading.
 
+### ADR-086 — The emoji library shows the ids, because the ids are the point
+**Context.** The panel stored emoji ids and used them, but never showed them.
+An operator who wanted one inside an ad, or on something this panel does not
+own, had no way to read the number back.
+**Decision.** 🎨 Library lists every saved emoji with its id in monospace, so a
+tap copies it, and says which markup form to paste it into.
+**Consequence.** Telegram's HTML spelling
+``<tg-emoji emoji-id="…">x</tg-emoji>`` means exactly the same as the
+MarkdownV2 ``![x](tg://emoji?id=…)`` this panel already parses; the screen says
+so rather than leaving someone to discover that two forms exist and guess which
+one is accepted.
+
+### ADR-087 — Button colour is a stored choice, shown in its own colour
+**Context.** Bot API 10.2 gives ``InlineKeyboardButton`` a ``style`` — one of
+``primary`` (blue), ``success`` (green), ``danger`` (red), or nothing.
+**Decision.** ``PanelButton.style``, chosen per button from the operator panel,
+loaded into the renderer with the labels and icons in one call. The picker
+renders each choice **in** that colour, which is the only honest preview of a
+thing whose entire purpose is how it looks.
+**Consequence.** Colour is stored beside the label and the icon, so the three
+survive a redeploy together — the failure that would otherwise be invisible is
+a deploy quietly returning every button to plain. Setting only a colour still
+writes a row, carrying the built-in label, so nothing appears to rename itself.
+One reload function does all three: three separate loads is three chances to
+reload two of them.
+
 ---
 
 ## Open tradeoffs
