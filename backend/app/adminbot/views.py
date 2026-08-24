@@ -274,37 +274,38 @@ def home(
     counts: dict[str, int],
     is_operator: bool = False,
 ) -> Screen:
-    active_rules = [r for r in rules if r.status is RuleStatus.active]
-    paused_rules = [r for r in rules if r.status is RuleStatus.paused]
-    healthy = [c for c in connections if c.status.value == "active"]
-    sending = [b for b in broadcasts if b.status is BroadcastStatus.sending]
+    """The first screen: what this bot does, and the way in to each part.
 
-    lines = ["📡 *InsightAdFlow*", ""]
+    Deliberately an introduction rather than a status board. Counts and
+    connection health moved to the screens that own them — *Accounts* lists
+    every connection with its state, *Ads* its own — so this one reads the same
+    on the first visit and the thousandth. A paused rule is not lost by that:
+    pausing one already pushes an alert, which reaches the customer whether or
+    not they happen to open this screen.
+    """
+    del rules, broadcasts, counts  # kept in the signature; see the docstring
+    lines = [
+        "📡 *InsightAdFlow*",
+        "",
+        "Create, schedule and track Telegram group advertisements from one place\\.",
+        "",
+        "📣 *Ads* — write one message and post it to every group you have "
+        "already joined\\. Set how fast, set how often it repeats, and see "
+        "which groups received it\\.",
+        "",
+        "💬 *Auto\\-reply* — answer people who message your account first, once "
+        "each\\. It cannot start a conversation\\.",
+        "",
+        "📋 *Forwarding* — copy new messages from one chat into others, automatically\\.",
+    ]
 
     if not connections:
         lines += [
-            "No Telegram account or bot is connected yet\\.",
             "",
-            "Tap *Accounts* to add one\\. Everything else unlocks after that\\.",
+            "*Start here:* tap *Accounts* and connect one\\. Everything else unlocks after that\\.",
         ]
     else:
-        lines.append(f"*Accounts* — {len(healthy)}/{len(connections)} working")
-        for connection in connections[:4]:
-            lines.append(
-                f"  {icon(connection.status.value)} {escape(connection.label)} "
-                f"\\({escape(connection.kind.value)}\\)"
-            )
-        lines += [
-            "",
-            f"*Ads* — {len(sending)} sending, {len(broadcasts)} total",
-            f"*Forwarding* — {len(active_rules)} active, {len(paused_rules)} paused",
-            "",
-            f"*Last 24h* — {counts.get('forwarded', 0)} sent · "
-            f"{counts.get('skipped', 0)} skipped · {counts.get('failed', 0)} failed",
-        ]
-
-    if paused_rules:
-        lines += ["", "⚠️ Some rules are paused and need attention\\."]
+        lines += ["", "Pick one below\\."]
 
     return Screen(
         "\n".join(lines),
@@ -639,7 +640,13 @@ def connections_list(*, connections: Sequence[TelegramConnection]) -> Screen:
             "it as an administrator\\.",
         ]
     else:
-        lines = ["🔗 *Accounts*", ""]
+        healthy = [c for c in connections if c.status.value == "active"]
+        lines = [
+            "🔗 *Accounts*",
+            "",
+            f"*{len(healthy)} of {len(connections)} working*",
+            "",
+        ]
         for connection in connections:
             lines.append(
                 f"{icon(connection.status.value)} *{escape(connection.label)}* "

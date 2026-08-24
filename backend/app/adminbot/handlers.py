@@ -531,6 +531,9 @@ async def choose_role(
     await query.answer()
 
 
+# ``/panel`` is no longer advertised — ``/start`` is the way in — but it keeps
+# working, because a command someone has been typing for weeks should not begin
+# doing nothing.
 @router.message(Command("panel", "home", "status"))
 async def panel(
     message: Message,
@@ -591,7 +594,7 @@ async def rules_command(message: Message, user_id: uuid.UUID, **_extra: Any) -> 
 async def help_command(message: Message, **_extra: Any) -> None:
     await message.answer(
         "*InsightAdFlow*\n\n"
-        "/panel — open the control panel\n"
+        "/start — open the panel\n"
         "/ads — your ads\n"
         "/rules — forwarding rules\n"
         "/cancel — abandon whatever you are in the middle of\n"

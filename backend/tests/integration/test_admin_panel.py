@@ -244,8 +244,49 @@ def buttons(screen: views.Screen) -> list[str]:
 
 def test_home_screen_without_a_connection_guides_the_operator():
     screen = views.home(connections=[], rules=[], broadcasts=[], counts={})
-    assert "No Telegram account or bot is connected" in screen.text
+    assert "Start here" in screen.text
     assert "nav:conns" in buttons(screen), "the next step must be one tap away"
+
+
+def test_home_screen_introduces_the_features():
+    """Home is an introduction, not a status board: it reads the same on the
+    first visit and the thousandth."""
+    from types import SimpleNamespace
+
+    connection = SimpleNamespace(
+        id=uuid.uuid4(),
+        label="Jack",
+        kind=SimpleNamespace(value="user"),
+        status=SimpleNamespace(value="active"),
+    )
+    screen = views.home(connections=[connection], rules=[], broadcasts=[], counts={})
+
+    for feature in ("*Ads*", "Auto\\-reply", "*Forwarding*"):
+        assert feature in screen.text
+    # The counts and connection health belong to the screens that own them.
+    assert "Jack" not in screen.text
+    assert "Last 24h" not in screen.text
+
+
+def test_the_accounts_screen_carries_the_health_home_used_to_show():
+    """Moved, not dropped — otherwise "1 of 2 working" would be nowhere."""
+    from types import SimpleNamespace
+
+    def connection(status: str, label: str):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            label=label,
+            kind=SimpleNamespace(value="user"),
+            status=SimpleNamespace(value=status),
+            telegram_username=None,
+            last_error_message_safe=None,
+        )
+
+    screen = views.connections_list(
+        connections=[connection("active", "Jack"), connection("error", "Spare")]
+    )
+    assert "1 of 2 working" in screen.text
+    assert "Jack" in screen.text and "Spare" in screen.text
 
 
 def test_home_screen_offers_ads_and_auto_reply():

@@ -911,6 +911,23 @@ direct database edit, or a future API all archive nothing.
 ``test_a_row_belonging_to_a_non_operator_archives_nothing`` holds that by
 revoking operator status with the setting already saved.
 
+### ADR-065 — Home introduces the product; status lives where it belongs
+**Context.** Home was a status board — connection health, ad counts, rule
+counts, a 24-hour tally — which told a returning operator things they could
+also get from the screen that owns each, and told a newcomer nothing about
+what the bot is for. ``/panel`` was the advertised way in, competing with the
+``/start`` every Telegram user already types.
+**Decision.** Home is now an introduction: one line on what the product does,
+then a sentence each on Ads, Auto-reply and Forwarding, then the buttons.
+Connection health moved into *Accounts*, which already listed every connection
+— it gained the "N of M working" line so nothing was dropped. ``/start`` is the
+advertised command; ``/panel`` is off the menu but still answered, because a
+command someone has typed for weeks should not begin doing nothing.
+**Consequence.** The paused-rule warning is gone from home, and that loses
+nothing: pausing a rule already pushes an alert, which arrives whether or not
+anyone opens this screen. Home now reads the same on the first visit and the
+thousandth, which is what an introduction should do.
+
 ---
 
 ## Open tradeoffs

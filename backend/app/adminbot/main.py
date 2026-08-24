@@ -40,7 +40,7 @@ ALLOWED_UPDATES = ["message", "callback_query"]
 #: What Telegram lists behind the ☰ button next to the message box. Registered
 #: at startup so the panel is discoverable without anyone remembering a command.
 COMMANDS = [
-    ("panel", "Open the control panel"),
+    ("start", "Open the panel"),
     ("ads", "Your ads"),
     ("rules", "Forwarding rules"),
     ("cancel", "Stop what you are in the middle of"),
