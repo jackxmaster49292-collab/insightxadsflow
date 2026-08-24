@@ -46,6 +46,24 @@ class MessageLink:
         return self.kind is LinkKind.public
 
 
+def chat_link(*, chat_kind: str, peer_id: int, username: str | None) -> MessageLink:
+    """A link to the chat itself.
+
+    Same three cases as a message link and the same caveats: a username opens
+    for anyone, ``t.me/c/`` opens for members, and a basic group has no form at
+    all.
+    """
+    if username:
+        return MessageLink(LinkKind.public, f"https://t.me/{username}")
+
+    if chat_kind in ("supergroup", "channel"):
+        internal = str(peer_id).removeprefix(_CHANNEL_PREFIX)
+        if internal != str(peer_id) and internal.isdigit():
+            return MessageLink(LinkKind.members_only, f"https://t.me/c/{internal}")
+
+    return MessageLink(LinkKind.none, None)
+
+
 def link_for(
     *,
     chat_kind: str,

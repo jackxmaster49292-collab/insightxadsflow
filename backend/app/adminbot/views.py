@@ -34,6 +34,7 @@ from app.db.models import (
     TelegramConnection,
 )
 from app.domain import reasons
+from app.domain.message_links import LinkKind, chat_link
 
 PAGE_SIZE = 6
 #: Groups per page in the picker. Smaller than PAGE_SIZE because each row also
@@ -493,7 +494,17 @@ def user_detail(  # type: ignore[no-untyped-def]
     )
 
 
-def user_groups(*, user, chats: Sequence, page: int) -> Screen:  # type: ignore[no-untyped-def,type-arg]
+#: Which callback verb pages each view of this screen.
+_KIND_VERB = {"all": "groups", "groups": "gall", "channels": "gchan"}
+
+
+def user_groups(  # type: ignore[no-untyped-def]
+    *,
+    user,
+    chats: Sequence,  # type: ignore[type-arg]
+    page: int,
+    kind: str = "all",
+) -> Screen:
     """What one account is a member of, for an operator.
 
     Titles and whether each can be posted in — the same metadata the account's
@@ -511,28 +522,46 @@ def user_groups(*, user, chats: Sequence, page: int) -> Screen:  # type: ignore[
 
     groups = [c for c in chats if c.chat_kind.value in ("group", "supergroup")]
     channels = [c for c in chats if c.chat_kind.value == "channel"]
-    postable = [c for c in chats if c.access and c.access.can_post_destination]
 
+    # Private conversations are synchronized but are not what this screen is
+    # about, and listing them buried the 237 chats that matter under 500 that
+    # do not — most of them titled with somebody's name, or "." .
+    shown = channels if kind == "channels" else groups if kind == "groups" else groups + channels
+    postable = [c for c in shown if c.access and c.access.can_post_destination]
+
+    heading = {"channels": "channels", "groups": "groups"}.get(kind, "groups and channels")
     lines = [
-        f"💭 *{escape(_user_label(user))} — groups*",
+        f"💭 *{escape(_user_label(user))} — {heading}*",
         "",
         f"*Groups* — {len(groups)}",
         f"*Channels* — {len(channels)}",
-        f"*Can post in* — {len(postable)}",
+        f"*Can post in* — {len(postable)} of {len(shown)} shown",
         "",
     ]
 
-    window, page, pages = _page_of(chats, page, PAGE_SIZE)
+    window, page, pages = _page_of(shown, page, PAGE_SIZE)
     for chat in window:
         mark = "📢" if chat.chat_kind.value == "channel" else "💭"
         can_post = chat.access and chat.access.can_post_destination
-        lines.append(f"{mark} *{escape(chat.title[:40])}*")
-        lines.append(f"   post {'✅' if can_post else '—'}")
+        lines.append(f"{mark} *{escape(chat.title[:40])}* — post {'✅' if can_post else '—'}")
+        link = chat_link(
+            chat_kind=chat.chat_kind.value, peer_id=chat.peer_id, username=chat.username
+        )
+        if link.url and link.kind is LinkKind.public:
+            lines.append(f"   {escape(link.url)}")
+        elif link.url:
+            lines.append(f"   {escape(link.url)} \\(members only\\)")
+        else:
+            lines.append("   _no link — Telegram publishes none for this kind of chat_")
+
+    verb = {"channels": "ggrp", "groups": "gall"}.get(kind, "gchan")
+    label = {"channels": "💭 Groups only", "groups": "💭 All"}.get(kind, "📢 Channels only")
 
     return Screen(
         "\n".join(lines),
         _rows(
-            _pager(f"usr:{user.id}:groups:", page, pages),
+            [InlineKeyboardButton(text=label, callback_data=f"usr:{user.id}:{verb}:0")],
+            _pager(f"usr:{user.id}:{_KIND_VERB[kind]}:", page, pages),
             _back(f"usr:{user.id}"),
             _home_row(),
         ),

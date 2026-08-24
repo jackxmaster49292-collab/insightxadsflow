@@ -575,5 +575,13 @@ member of: group or channel, and whether it can post there. Useful when you
 drive the bot from more than one of your own accounts and do not want to switch
 Telegram accounts to check.
 
-It shows titles and posting rights only. No operator can read a message, an ad
-draft, or an auto-reply through this bot.
+Each chat carries a link where Telegram publishes one — `t.me/username` for a
+public chat, `t.me/c/…` for a private one (which opens for members), and
+nothing for a basic group, which the screen says rather than leaving blank.
+Buttons switch between all, groups only and channels only.
+
+Private conversations are not listed. They are synchronized, but they are not
+what this screen is for.
+
+It shows titles, links and posting rights only. No operator can read a message,
+an ad draft, or an auto-reply through this bot.

@@ -1168,15 +1168,23 @@ from. Erasing that to tidy a list would be destroying evidence to save a row.
 **Context.** The operator drives this bot from two of their own Telegram
 accounts and wanted to see either one's groups without switching accounts.
 ADR-032 had held the Users screen to counts only.
-**Decision.** 👥 Users → an account → 💭 Their groups lists titles, whether each
-is a group or a channel, and whether the account can post in it. Metadata only:
-no operator can read a message here and that has not changed.
-**Consequence.** This does widen what an operator sees about *other* people —
-group memberships say a good deal about someone — and with the terms gate gone
-(ADR-071) nobody is told. It is a smaller step than the archive already takes,
-which copies every account's ad content to the operator's own group, and the
-same judgement applies: on a single-owner deployment it costs nothing, and on a
-shared one it is one of the things that would need saying.
+**Decision.** 👥 Users → an account → 💭 Their groups lists **groups and
+channels only**, each with a link where Telegram publishes one, and whether the
+account can post there. Views for all / groups / channels. Metadata only: no
+operator can read a message here and that has not changed.
+**Consequence.** Private conversations are synchronized but excluded — the
+first version listed everything, and 500 chats titled with somebody's name or
+"." buried the 237 that mattered across 123 pages. Links follow the same three
+cases as ADR-058: a username opens for anyone, ``t.me/c/`` opens for members,
+and a basic group has no form at all, which the screen says rather than leaving
+blank.
+
+This does widen what an operator sees about *other* people — group memberships
+say a good deal about someone — and with the terms gate gone (ADR-071) nobody
+is told. It is a smaller step than the archive already takes, which copies
+every account's ad content to the operator's own group, and the same judgement
+applies: on a single-owner deployment it costs nothing, and on a shared one it
+is one of the things that would need saying.
 
 ---
 

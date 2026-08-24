@@ -2373,13 +2373,14 @@ async def user_actions(
             await query.answer("That account no longer exists.", show_alert=True)
             return
 
-        if action == "groups":
+        if action in ("groups", "gall", "gchan", "ggrp"):
+            kind = {"gchan": "channels", "ggrp": "groups"}.get(action, "all")
             page = 0
             parts = (query.data or "").split(":")
             if len(parts) > 3 and parts[3].isdigit():
                 page = int(parts[3])
-            chats = await chat_repo.list_filtered(session, user_id=target.id, limit=1000)
-            await _render(query, views.user_groups(user=target, chats=chats, page=page))
+            chats = await chat_repo.list_filtered(session, user_id=target.id, limit=2000)
+            await _render(query, views.user_groups(user=target, chats=chats, page=page, kind=kind))
             await query.answer()
             return
 

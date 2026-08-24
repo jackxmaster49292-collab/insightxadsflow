@@ -592,6 +592,96 @@ async def test_an_operator_can_see_which_groups_an_account_is_in(client, actor, 
     assert_keyboard_is_sendable(screen.keyboard)
 
 
+async def test_private_chats_are_not_listed_among_the_groups(client, actor, session):
+    """They are synchronized, but listing them buried the chats that matter
+    under hundreds titled with somebody's name, or "." ."""
+    from tests.conftest import connect_bot, discovered, sync_with_chats
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            discovered(-1002001, "A supergroup", chat_kind="supergroup"),
+            discovered(700100, ".", chat_kind="private"),
+            discovered(700101, "-", chat_kind="private"),
+        ],
+    )
+
+    from app.repositories import chats as chat_repo
+    from app.repositories import users as user_repo
+
+    target = await user_repo.get_by_id(session, uuid.UUID(actor.id))
+    chats = await chat_repo.list_filtered(session, user_id=target.id, limit=1000)
+    screen = views.user_groups(user=target, chats=chats, page=0)
+
+    assert "A supergroup" in screen.text
+    assert "Groups* — 1" in screen.text
+    body = screen.text.split("Can post in")[1]
+    assert "\n💭 *\\.*" not in body and "*\\-*" not in body, "no private chats in the list"
+
+
+async def test_each_chat_carries_a_link_where_telegram_offers_one(client, actor, session):
+    from types import SimpleNamespace
+
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    def chat(title, kind, peer, username=None):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            title=title,
+            chat_kind=SimpleNamespace(value=kind),
+            peer_id=peer,
+            username=username,
+            access=SimpleNamespace(can_post_destination=True),
+        )
+
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    screen = views.user_groups(
+        user=user,
+        chats=[
+            chat("Public channel", "channel", -1001111111111, username="insightxstore"),
+            chat("Private group", "supergroup", -1002001234567),
+            chat("Basic group", "group", -412345678),
+        ],
+        page=0,
+    )
+
+    # Escaped for MarkdownV2 — the dots in a URL must carry a backslash or
+    # Telegram rejects the whole message; it still renders as a link.
+    plain = screen.text.replace("\\", "")
+    assert "t.me/insightxstore" in plain
+    assert "t.me/c/2001234567" in plain
+    assert "members only" in plain
+    assert "no link" in plain, "and the case with none says so"
+    assert_valid_markdown_v2(screen.text)
+
+
+async def test_the_channels_only_view_shows_just_channels(client, actor, session):
+    from types import SimpleNamespace
+
+    def chat(title, kind, peer):
+        return SimpleNamespace(
+            id=uuid.uuid4(),
+            title=title,
+            chat_kind=SimpleNamespace(value=kind),
+            peer_id=peer,
+            username=None,
+            access=SimpleNamespace(can_post_destination=True),
+        )
+
+    user = SimpleNamespace(id=uuid.uuid4(), telegram_username="me", telegram_user_id=1)
+    chats = [chat("A group", "supergroup", -1002001), chat("A channel", "channel", -1001001)]
+
+    channels = views.user_groups(user=user, chats=chats, page=0, kind="channels")
+    assert "A channel" in channels.text
+    assert "A group" not in channels.text.split("Can post in")[1]
+
+    groups = views.user_groups(user=user, chats=chats, page=0, kind="groups")
+    assert "A group" in groups.text
+    assert "A channel" not in groups.text.split("Can post in")[1]
+
+
 async def test_a_non_operator_cannot_see_anyone_s_groups(client, actor, state, session):
     from app.adminbot import handlers
     from app.repositories import users as user_repo
