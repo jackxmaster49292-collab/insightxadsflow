@@ -1060,3 +1060,50 @@ async def test_a_paused_then_resumed_ad_archives_everything_it_sent(client, acto
     assert "3 groups" in index
     for title in ("Group 01", "Group 02", "Group 03"):
         assert title in index, "including the one delivered before the pause"
+
+
+async def test_a_full_length_bio_survives_whole(client, actor, session):
+    """Telegram caps a description at 255 characters. Clipping below that cut
+    the end off real bios — and the end is not the throwaway part when the
+    point is recognising the group later."""
+    from app.adapters.base import ChatDetails
+    from app.repositories import chats as chat_repo
+
+    bio = "A" * 255
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    script = script_for(ctx["connection_id"])
+    chat = await session.get(TelegramChat, ctx["chat_ids"][0])
+    script.chat_details[chat_repo.to_ref(chat).key] = ChatDetails(description=bio, member_count=900)
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    index = _bot_script().calls_to("send_text")[-1].args[1]
+    assert bio in index, "the whole description, not a prefix of it"
+    assert "…" not in index
+
+
+async def test_the_database_keeps_the_description_verbatim(client, actor, session):
+    """Whatever the message shows, the stored copy is the untouched original."""
+    from app.adapters.base import ChatDetails
+    from app.repositories import chats as chat_repo
+
+    bio = "B" * 255
+    ctx = await build_broadcast(actor, session, groups=1, delay_ms=0)
+    broadcast = await session.get(Broadcast, ctx["broadcast_id"])
+    await _bot_archive(session, actor)
+    chat = await session.get(TelegramChat, ctx["chat_ids"][0])
+    script_for(ctx["connection_id"]).chat_details[chat_repo.to_ref(chat).key] = ChatDetails(
+        description=bio, member_count=1
+    )
+    await broadcast_service.queue(session, broadcast=broadcast)
+    await session.commit()
+    await drain(session, broadcast.id)
+    await session.commit()
+
+    await session.refresh(chat)
+    assert chat.description == bio

@@ -809,7 +809,7 @@ members-only link plus a title is not enough to recognise a group months
 later.
 **Decision.** For groups whose link is not durable — private supergroups and
 basic groups — the archive index adds what the chat says about itself: its
-description (clipped to 160 characters) and its member count. Learned via
+description (whole — Telegram caps one at 255 characters) and its member count. Learned via
 ``chat_details`` on the adapter (``GetFullChannel``/``GetFullChat`` under
 MTProto, ``getChat`` under the Bot API), cached on the chat row with a
 30-day staleness, and fetched at most 25 per archived round with a 500 ms

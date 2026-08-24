@@ -71,9 +71,13 @@ _DETAILS_STALE_DAYS = 30
 #: bot-delivered archive does without a connection row to hang it off.
 _ARCHIVE_BOT_ID = uuid.UUID("00000000-0000-0000-0000-0000000a4c41")
 
-#: How much of a bio the index carries. Enough to recognise the group, without
-#: one chatty bio swallowing the chunk budget for everyone else's lines.
-_BIO_CHARS = 160
+#: How much of a bio the index carries. Telegram caps a chat description at
+#: **255 characters** (Bot API, ``setChatDescription``), so this holds any real
+#: one whole — the clip is a backstop against something unexpected, not an
+#: editorial decision. It was 160, which quietly cut the end off the longer
+#: descriptions, and the end of a description is not the throwaway part when
+#: the whole reason for keeping it is recognising a group later.
+_BIO_CHARS = 400
 
 
 @dataclass(frozen=True, slots=True)
