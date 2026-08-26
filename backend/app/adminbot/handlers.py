@@ -1790,6 +1790,9 @@ async def ad_actions(
                 broadcast=broadcast,
                 counts=await broadcast_repo.status_counts(session, broadcast_id=broadcast.id),
                 target_count=len(target_ids),
+                reason_counts=await broadcast_repo.reason_counts(
+                    session, broadcast_id=broadcast.id
+                ),
             )
 
     await _render(query, screen)

@@ -1445,7 +1445,13 @@ def ad_confirm(
     )
 
 
-def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int) -> Screen:
+def ad_detail(
+    *,
+    broadcast: Broadcast,
+    counts: dict[str, int],
+    target_count: int,
+    reason_counts: dict[str, int] | None = None,
+) -> Screen:
     done = counts.get("succeeded", 0)
     lines = [
         f"{delivery_icon(broadcast, counts)} *{escape(broadcast.name)}*",
@@ -1464,10 +1470,14 @@ def ad_detail(*, broadcast: Broadcast, counts: dict[str, int], target_count: int
     # line as a subtraction problem.
     missed = sum(counts.get(s, 0) for s in ("skipped", "failed", "dead_letter", "needs_attention"))
     if missed:
-        lines.append(
-            f"⚠️ *{missed} of {target_count} did not receive it\\.* "
-            "Tap *Events* for the group and the reason\\."
-        )
+        lines.append(f"⚠️ *{missed} of {target_count} did not receive it\\.*")
+        # The reason, not a pointer to where the reason is kept. One cause
+        # almost always accounts for nearly all of them, and that pattern is
+        # invisible in a list of 152 rows — which is what "tap Events" alone
+        # asked someone to read.
+        for code, count in sorted((reason_counts or {}).items(), key=lambda kv: (-kv[1], kv[0])):
+            lines.append(f"   *{count}* — {escape(reasons.describe(code))}")
+        lines.append("_Tap Events for which group, one by one\\._")
     if broadcast.repeat_every_s:
         lines.append(f"*Repeat* — {escape(repeat_label(broadcast.repeat_every_s))}")
         if broadcast.repeat_count:

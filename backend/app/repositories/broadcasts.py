@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Broadcast, BroadcastStatus, BroadcastTarget, JobStatus, TelegramChat
+from app.domain import reasons
 
 
 def now() -> datetime:
@@ -453,6 +454,34 @@ async def status_counts(session: AsyncSession, *, broadcast_id: uuid.UUID) -> di
         .group_by(BroadcastTarget.status)
     )
     return {status.value: int(count) for status, count in result.all()}
+
+
+#: The statuses that mean "this group did not get the ad, and will not".
+_UNFINISHED = (
+    JobStatus.skipped,
+    JobStatus.failed,
+    JobStatus.dead_letter,
+    JobStatus.needs_attention,
+)
+
+
+async def reason_counts(session: AsyncSession, *, broadcast_id: uuid.UUID) -> dict[str, int]:
+    """Why the groups that missed it missed it, counted by reason.
+
+    "152 of 156 did not receive it" followed by a list of 152 rows is a pattern
+    nobody can see — and the pattern is the whole answer, because one cause
+    almost always accounts for nearly all of them. Two lines naming the reasons
+    say in a glance what paging through Events cannot say at all.
+    """
+    result = await session.execute(
+        select(BroadcastTarget.last_error_code, func.count())
+        .where(
+            BroadcastTarget.broadcast_id == broadcast_id,
+            BroadcastTarget.status.in_(_UNFINISHED),
+        )
+        .group_by(BroadcastTarget.last_error_code)
+    )
+    return {(code or reasons.UNKNOWN): int(count) for code, count in result.all()}
 
 
 async def counts_for(

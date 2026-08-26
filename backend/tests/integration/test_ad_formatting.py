@@ -889,3 +889,84 @@ def test_a_clipped_confirm_screen_is_still_valid_markdown():
     assert "more characters" in screen.text
     assert len(screen.text) <= 4096
     assert_valid_markdown_v2(screen.text)
+
+
+# --------------------------------------------------------------------------- #
+# Why a round missed
+# --------------------------------------------------------------------------- #
+def _valid(text: str) -> None:
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    assert_valid_markdown_v2(text)
+
+
+def test_the_ad_screen_says_why_the_groups_missed_it():
+    """ "152 of 156 did not receive it" and a list of 152 rows is a pattern
+    nobody can see — and one cause almost always accounts for nearly all of
+    them, so naming it is the entire answer."""
+    from app.adminbot import views
+    from app.domain import reasons
+
+    text = views.ad_detail(
+        broadcast=fake_broadcast(status=BroadcastStatus.sending),
+        counts={"succeeded": 4, "skipped": 152},
+        target_count=156,
+        reason_counts={reasons.NOT_A_MEMBER: 149, reasons.WRITE_FORBIDDEN: 3},
+    ).text
+
+    assert "152 of 156 did not receive it" in text
+    assert views.escape(reasons.describe(reasons.NOT_A_MEMBER)) in text
+    assert views.escape(reasons.describe(reasons.WRITE_FORBIDDEN)) in text
+    assert text.index("*149*") < text.index("*3*"), "the common cause first"
+    _valid(text)
+
+
+def test_the_reasons_are_left_out_when_nothing_missed():
+    from app.adminbot import views
+
+    text = views.ad_detail(
+        broadcast=fake_broadcast(status=BroadcastStatus.completed),
+        counts={"succeeded": 5},
+        target_count=5,
+        reason_counts={},
+    ).text
+
+    assert "did not receive it" not in text
+    _valid(text)
+
+
+async def test_the_reason_counts_come_from_the_targets_own_codes(client, actor, session):
+    """One grouped query rather than a count per row: an ad with 500 groups
+    opens its screen as fast as any other."""
+    from app.db.models import BroadcastTarget, JobStatus
+    from app.domain import reasons
+    from app.repositories import broadcasts as broadcast_repo
+
+    built = await build_broadcast(actor, session, groups=4)
+    targets = (
+        (
+            await session.execute(
+                select(BroadcastTarget)
+                .where(BroadcastTarget.broadcast_id == built["broadcast_id"])
+                .order_by(BroadcastTarget.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    outcomes = [
+        (JobStatus.skipped, reasons.NOT_A_MEMBER),
+        (JobStatus.skipped, reasons.NOT_A_MEMBER),
+        (JobStatus.failed, reasons.WRITE_FORBIDDEN),
+        (JobStatus.succeeded, None),
+    ]
+    for target, (status, code) in zip(targets, outcomes, strict=True):
+        target.status = status
+        target.last_error_code = code
+    await session.commit()
+
+    counted = await broadcast_repo.reason_counts(session, broadcast_id=built["broadcast_id"])
+
+    assert counted == {reasons.NOT_A_MEMBER: 2, reasons.WRITE_FORBIDDEN: 1}, (
+        "the delivered one is not a reason for anything"
+    )
