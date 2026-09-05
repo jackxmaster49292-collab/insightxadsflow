@@ -210,3 +210,103 @@ async def test_disconnect_disables_dependent_rules(client, actor, session):
 
     detail = (await actor.get(f"/forwarding-rules/{rule_id}")).json()
     assert detail["status"] == RuleStatus.disconnected.value
+
+
+# --------------------------------------------------------------------------- #
+# What the listing already told us
+# --------------------------------------------------------------------------- #
+async def test_sync_asks_nothing_per_chat_when_the_listing_carried_the_rights(
+    client, actor, session
+):
+    """Two round trips per chat is fifteen hundred calls on an account in 735
+    groups, and a quarter of an hour behind a screen that says "a few seconds" —
+    for answers Telegram had already sent on the dialog list itself."""
+    from app.adapters.base import AccessReport
+    from app.repositories import chats as chat_repo
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            discovered(
+                -100_500_001,
+                "Open group",
+                chat_kind="supergroup",
+                posting=AccessReport.ok(),
+                reading=AccessReport.ok(),
+            ),
+            discovered(
+                -100_500_002,
+                "Muted group",
+                chat_kind="supergroup",
+                posting=AccessReport.denied(reasons.WRITE_FORBIDDEN),
+                reading=AccessReport.ok(),
+            ),
+        ],
+    )
+
+    script = script_for(connection_id)
+    assert not script.calls_to("check_destination_access"), "the listing already said"
+    assert not script.calls_to("check_source_access")
+
+    chats = {
+        c.title: c
+        for c in await chat_repo.list_filtered(session, user_id=uuid.UUID(actor.id), limit=50)
+    }
+    assert chats["Open group"].access.can_post_destination is True
+    assert chats["Muted group"].access.can_post_destination is False
+    assert chats["Muted group"].access.destination_reason_code == reasons.WRITE_FORBIDDEN
+
+
+async def test_a_listing_that_cannot_tell_is_still_checked_per_chat(client, actor, session):
+    """A bot learns its chats from updates, not from a dialog list, and an
+    update carries no rights. Unset has to mean "ask", never "allowed"."""
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor, connection_id, [discovered(-100_500_003, "Unknown rights", chat_kind="supergroup")]
+    )
+
+    script = script_for(connection_id)
+    assert script.calls_to("check_destination_access"), "nothing was told, so it must ask"
+
+
+async def test_a_protected_chat_is_still_refused_as_a_source(client, actor, session):
+    """Content protection belongs to the chat, not to this account, so the
+    listing's "you can read it" must not overrule it."""
+    from app.adapters.base import AccessReport
+    from app.repositories import chats as chat_repo
+
+    connection_id = await connect_bot(actor)
+    await sync_with_chats(
+        actor,
+        connection_id,
+        [
+            discovered(
+                -100_500_004,
+                "Protected",
+                chat_kind="supergroup",
+                protected=True,
+                posting=AccessReport.ok(),
+                reading=AccessReport.ok(),
+            )
+        ],
+    )
+
+    chats = await chat_repo.list_filtered(session, user_id=uuid.UUID(actor.id), limit=50)
+    protected = next(c for c in chats if c.title == "Protected")
+    assert protected.access.can_read_source is False
+    assert protected.access.source_reason_code == reasons.PROTECTED_CONTENT
+
+
+def test_the_two_verdicts_are_one_implementation():
+    """The discovery pass and the per-chat check must agree about what "can
+    post" means. Two copies of the rules would disagree eventually, and it
+    would show as a group the picker offers and every delivery refuses."""
+    import inspect
+
+    from app.adapters import user as user_adapter
+
+    body = inspect.getsource(user_adapter.UserAdapter.check_destination_access)
+    assert "posting_verdict(" in body, "the check delegates rather than repeating itself"
+    assert "banned_rights" not in body, "and holds no copy of the rules"

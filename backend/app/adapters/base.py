@@ -71,6 +71,15 @@ class DiscoveredChat:
     is_public: bool | None = None
     has_protected_content: bool | None = None
 
+    #: What the discovery pass could already tell about rights, if anything.
+    #:
+    #: Telegram puts an account's posting rights on the chat object itself, so
+    #: a listing that returns chat objects has already been told. ``None`` means
+    #: this adapter could not say and the check has to be made per chat — one
+    #: network round trip each, which is what 735 groups made unaffordable.
+    posting: AccessReport | None = None
+    reading: AccessReport | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class AccessReport:

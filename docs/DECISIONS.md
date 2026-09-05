@@ -1336,6 +1336,30 @@ are matched by name because their strings become button text without passing
 through a constructor call, and a guard test asserts every label in them is
 filed as a button.
 
+### ADR-092 — Discovery reports rights; it does not go and ask for them
+**Context.** ``synchronize`` called ``check_source_access`` and
+``check_destination_access`` for every chat it found. Each is a network round
+trip — a ``get_entity`` and a one-message read — so an account in 735 groups
+cost about fifteen hundred calls. It took ten to fifteen minutes behind a
+screen that said "this takes a few seconds", and because the whole run is one
+transaction, nothing at all was visible until the last chat finished: a group
+joined that morning looked like it had not been found.
+**Decision.** ``list_available_chats`` returns the verdicts with the chats.
+Telegram already puts an account's rights on the chat object — ``left``, the
+ban applied to everyone, the ban applied to you, your admin rights — and the
+dialog list carries those objects, so the answers arrive for free.
+``DiscoveredChat.posting``/``.reading`` hold them; ``None`` means the adapter
+could not tell and the per-chat check still runs, which is the bot adapter's
+case since it learns chats from updates.
+**Consequence.** One function, ``posting_verdict``, is shared by the discovery
+pass and the per-chat check — two would eventually disagree about what "can
+post" means, and the disagreement would show as a group the picker offers and
+every delivery refuses. The safety property is unchanged: appearing in a list
+still confers nothing, because the verdict is Telegram's own rights fields and
+because ``execute_target`` revalidates immediately before every send. Content
+protection stays outside the verdict: it belongs to the chat rather than to
+this account, so a listing's "you can read it" must not overrule it.
+
 ---
 
 ## Open tradeoffs

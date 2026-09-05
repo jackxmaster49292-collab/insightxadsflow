@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     create_async_engine,
 )
 
-from app.adapters.base import ChatRef, DiscoveredChat, PeerKind  # noqa: E402
+from app.adapters.base import AccessReport, ChatRef, DiscoveredChat, PeerKind  # noqa: E402
 from app.adapters.factory import mock_script_for, reset_mock_registry  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import models  # noqa: E402,F401
@@ -230,7 +230,15 @@ def discovered(
     *,
     chat_kind: str = "channel",
     protected: bool = False,
+    posting: AccessReport | None = None,
+    reading: AccessReport | None = None,
 ) -> DiscoveredChat:
+    """One chat as a listing would return it.
+
+    ``posting``/``reading`` left unset is the adapter saying it could not tell
+    from the listing — a bot's, which learns chats from updates. A real account
+    listing does tell, and passing them here is what exercises that path.
+    """
     return DiscoveredChat(
         ref=chat_ref(peer_id),
         title=title,
@@ -238,6 +246,8 @@ def discovered(
         username=None,
         is_public=False,
         has_protected_content=protected,
+        posting=posting,
+        reading=reading,
     )
 
 

@@ -67,6 +67,55 @@ def _chat_kind(entity: Any) -> str:
     return "other"
 
 
+def posting_verdict(entity: Any) -> AccessReport:
+    """Whether this account may post in a chat, read off the chat itself.
+
+    Telegram carries an account's rights on the chat object — ``left``, the
+    ban it applies to everyone, the ban it applies to you, and your admin
+    rights if any. So the answer arrives with the chat and no question needs
+    asking.
+
+    One implementation, shared by the discovery pass and the per-chat check.
+    Two would eventually disagree about what "can post" means, and the
+    disagreement would show as a group the picker offers and every delivery
+    refuses.
+    """
+    if isinstance(entity, types.Channel):
+        if getattr(entity, "left", False):
+            return AccessReport.denied(reasons.NOT_A_MEMBER)
+        banned = getattr(entity, "banned_rights", None)
+        if banned is not None and getattr(banned, "send_messages", False):
+            return AccessReport.denied(reasons.WRITE_FORBIDDEN)
+        if getattr(entity, "broadcast", False):
+            rights = getattr(entity, "admin_rights", None)
+            if rights is None or not getattr(rights, "post_messages", False):
+                return AccessReport.denied(reasons.ADMIN_REQUIRED)
+    default_banned = getattr(entity, "default_banned_rights", None)
+    if default_banned is not None and getattr(default_banned, "send_messages", False):
+        admin = getattr(entity, "admin_rights", None)
+        if admin is None:
+            return AccessReport.denied(reasons.WRITE_FORBIDDEN)
+    return AccessReport.ok()
+
+
+def reading_verdict(entity: Any) -> AccessReport:
+    """Whether this account can read a chat, read off the chat itself.
+
+    Membership is the whole of it: a chat in the dialog list is one the
+    account is in, and being in it is what lets it read. The old proof was to
+    fetch one message, which is true but costs a round trip per chat to learn
+    something the listing already implied — and a chat left behind still says
+    so on the object.
+
+    Content protection is *not* decided here. It is a property of the chat
+    rather than of this account, it is recorded separately, and the caller
+    applies it to both this verdict and the stored one.
+    """
+    if getattr(entity, "left", False):
+        return AccessReport.denied(reasons.NOT_A_MEMBER)
+    return AccessReport.ok()
+
+
 def detect_media_type(message: Any) -> MediaType:
     media = getattr(message, "media", None)
     if media is None:
@@ -265,6 +314,14 @@ class UserAdapter:
 
     # --- discovery ------------------------------------------------------- #
     async def list_available_chats(self) -> list[DiscoveredChat]:
+        """Every chat the account is in, with its rights already worked out.
+
+        The rights come back on the dialog objects, so reading them here costs
+        nothing. Asking per chat instead cost two round trips each — a
+        ``get_entity`` and a one-message read — which on an account in 735
+        groups is around fifteen hundred calls and a quarter of an hour, for
+        answers Telegram had already sent.
+        """
         await self._ready()
         discovered: list[DiscoveredChat] = []
         async for dialog in self._client.iter_dialogs():
@@ -281,6 +338,8 @@ class UserAdapter:
                     username=getattr(entity, "username", None),
                     is_public=bool(getattr(entity, "username", None)),
                     has_protected_content=bool(getattr(entity, "noforwards", False)),
+                    posting=posting_verdict(entity),
+                    reading=reading_verdict(entity),
                 )
             )
         return discovered
@@ -373,24 +432,9 @@ class UserAdapter:
         await self._ready()
         try:
             entity = await self._client.get_entity(await self._entity(ref))
-            if isinstance(entity, types.Channel):
-                if getattr(entity, "left", False):
-                    return AccessReport.denied(reasons.NOT_A_MEMBER)
-                banned = getattr(entity, "banned_rights", None)
-                if banned is not None and getattr(banned, "send_messages", False):
-                    return AccessReport.denied(reasons.WRITE_FORBIDDEN)
-                if getattr(entity, "broadcast", False):
-                    rights = getattr(entity, "admin_rights", None)
-                    if rights is None or not getattr(rights, "post_messages", False):
-                        return AccessReport.denied(reasons.ADMIN_REQUIRED)
-            default_banned = getattr(entity, "default_banned_rights", None)
-            if default_banned is not None and getattr(default_banned, "send_messages", False):
-                admin = getattr(entity, "admin_rights", None)
-                if admin is None:
-                    return AccessReport.denied(reasons.WRITE_FORBIDDEN)
         except Exception as exc:
             return AccessReport.denied(classify_error(exc).code)
-        return AccessReport.ok()
+        return posting_verdict(entity)
 
     # --- intake ---------------------------------------------------------- #
     async def receive_new_messages(self) -> AsyncIterator[InboundMessage]:

@@ -51,7 +51,19 @@ async def synchronize(
         seen.add((chat.peer_type.value, chat.peer_id))
         report.discovered += 1
 
-        await _check_and_store(session, chat=chat, adapter=adapter, report=report)
+        # Rights the listing already carried are used as they are. Asking again
+        # per chat is two round trips each, which on 735 groups is a quarter of
+        # an hour of waiting for answers Telegram had already sent — and for a
+        # quarter of an hour nothing at all was visible, because none of it
+        # commits until the last one is done.
+        await _check_and_store(
+            session,
+            chat=chat,
+            adapter=adapter,
+            report=report,
+            known_source=discovered.reading,
+            known_destination=discovered.posting,
+        )
 
     report.deactivated = await chat_repo.deactivate_missing(
         session, connection_id=connection.id, seen=seen
@@ -76,21 +88,29 @@ async def _check_and_store(
     adapter: TelegramAdapter,
     report: SyncReport,
     check_source: str = "sync",
+    known_source: AccessReport | None = None,
+    known_destination: AccessReport | None = None,
 ) -> None:
     ref: ChatRef = chat_repo.to_ref(chat)
 
-    try:
-        source_report = await adapter.check_source_access(ref)
-    except Exception as exc:
-        # A check that errors is not a confirmation — fail closed.
-        classified = classify_error(exc)
-        source_report = AccessReport.denied(classified.code)
-        report.errors += 1
-        chat.last_error_code = classified.code
-        chat.last_error_message_safe = classified.safe_message
+    if known_source is not None:
+        source_report = known_source
+    else:
+        try:
+            source_report = await adapter.check_source_access(ref)
+        except Exception as exc:
+            # A check that errors is not a confirmation — fail closed.
+            classified = classify_error(exc)
+            source_report = AccessReport.denied(classified.code)
+            report.errors += 1
+            chat.last_error_code = classified.code
+            chat.last_error_message_safe = classified.safe_message
 
     if chat.chat_kind in NON_DESTINATION_KINDS:
         destination_allowed, destination_reason = False, reasons.NOT_A_DESTINATION_TYPE
+    elif known_destination is not None:
+        destination_allowed = known_destination.allowed
+        destination_reason = known_destination.reason_code
     else:
         try:
             destination_report = await adapter.check_destination_access(ref)

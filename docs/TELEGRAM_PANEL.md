@@ -96,6 +96,13 @@ joined.
 connection has already joined and records where it is allowed to post. It never
 joins anything for you.
 
+It takes seconds, not minutes, however many groups there are. Telegram sends
+your posting rights on the chats themselves, so the whole answer arrives with
+the list; asking about each chat separately used to cost two round trips each,
+which on an account in 735 groups was around fifteen hundred calls and a
+quarter of an hour — and nothing appeared until the last one finished, so a
+newly joined group looked like it had not been found.
+
 Nothing else works until this has run at least once — the group picker has
 nothing to offer otherwise, and it says so.
 
