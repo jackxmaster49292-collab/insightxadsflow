@@ -1001,3 +1001,105 @@ class AuditEvent(Base):
     )
 
     __table_args__ = (Index("ix_audit_events_user_id_created_at", "user_id", "created_at"),)
+
+
+# --------------------------------------------------------------------------- #
+# Chat links noticed in messages
+# --------------------------------------------------------------------------- #
+class DiscoveredLink(Base, TimestampMixin):
+    """A group or channel someone linked to in one of your groups.
+
+    Deliberately thin. The row holds the link, how often it has been seen and
+    where — and nothing about the message it came in or the person who sent it.
+    Neither is needed to answer "which chats keep coming up", and not storing
+    them is the difference between counting mentions and keeping a file on
+    people.
+
+    Discovery only. Nothing here joins anything: a link is something to look at
+    and decide about, and the deciding is the operator's.
+    """
+
+    __tablename__ = "discovered_links"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    #: ``public`` or ``invite`` — the vocabulary is ``app.domain.links.LinkKind``.
+    #: A string rather than a second Postgres enum: two values, defined in the
+    #: domain, and an enum type here would be a copy that has to be migrated
+    #: whenever the domain gains a third.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: The username, lowercased, or the invite hash exactly as written.
+    link_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    times_seen: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: Set when the operator hides it. Kept rather than deleted so the same
+    #: link being posted another forty times does not bring it back.
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    #: What the chat says about itself, looked up only for the page being
+    #: viewed. ``resolved_kind`` may come back ``user``, which is how a
+    #: ``t.me/name`` that turns out to be a person leaves the list.
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_title: Mapped[str | None] = mapped_column(String(255))
+    resolved_member_count: Mapped[int | None] = mapped_column(Integer)
+    resolved_kind: Mapped[str | None] = mapped_column(String(16))
+    resolve_error_code: Mapped[str | None] = mapped_column(String(64))
+
+    sources: Mapped[list[DiscoveredLinkSource]] = relationship(
+        back_populates="link", cascade="all, delete-orphan"
+    )
+
+    @property
+    def url_text(self) -> str:
+        """The address, rebuilt. Stored as key plus kind rather than as a URL
+        so that one chat written three ways counts once."""
+        return (
+            f"https://t.me/+{self.link_key}"
+            if self.kind == "invite"
+            else (f"https://t.me/{self.link_key}")
+        )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "kind", "link_key", name="uq_discovered_links_connection_key"
+        ),
+        Index("ix_discovered_links_connection_hidden", "connection_id", "hidden_at"),
+    )
+
+
+class DiscoveredLinkSource(Base):
+    """Which of your groups a link turned up in, and how often there.
+
+    The count that matters is the number of *distinct* groups: one person
+    posting the same link fifty times in one chat is one person, while six
+    different groups carrying it is a chat that several communities overlap
+    with. Keeping a row per group is what makes that number available.
+    """
+
+    __tablename__ = "discovered_link_sources"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    link_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("discovered_links.id", ondelete="CASCADE"), nullable=False
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("telegram_chats.id", ondelete="CASCADE"), nullable=False
+    )
+    times_seen: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    link: Mapped[DiscoveredLink] = relationship(back_populates="sources")
+
+    __table_args__ = (
+        UniqueConstraint("link_id", "chat_id", name="uq_discovered_link_sources_link_chat"),
+    )

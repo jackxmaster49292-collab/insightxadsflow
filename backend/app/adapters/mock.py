@@ -21,6 +21,7 @@ from app.adapters.base import (
     DiscoveredChat,
     HealthReport,
     InboundMessage,
+    LinkPreview,
     TextEntity,
 )
 from app.adapters.capabilities import capabilities_for
@@ -58,6 +59,8 @@ class MockScript:
     installed_emoji: dict[str, str] = field(default_factory=dict)
     #: What each chat says about itself, keyed by peer.
     chat_details: dict[tuple[str, int], ChatDetails] = field(default_factory=dict)
+    #: What a t.me link previews as, keyed by "<kind>:<key>".
+    link_previews: dict[str, LinkPreview] = field(default_factory=dict)
     #: Errors keyed by method name, raised on the next call to that method.
     #: `delivery_errors` is keyed by destination, which discovery and health
     #: checks do not have — so a test could not script a failure in either.
@@ -143,6 +146,11 @@ class MockAdapter:
         self.script.record("chat_details", ref)
         self._maybe_fail("chat_details")
         return self.script.chat_details.get(ref.key, ChatDetails())
+
+    async def preview_link(self, kind: str, key: str) -> LinkPreview:
+        self.script.record("preview_link", kind, key)
+        self._maybe_fail("preview_link")
+        return self.script.link_previews.get(f"{kind}:{key}", LinkPreview())
 
     async def check_destination_access(self, ref: ChatRef) -> AccessReport:
         self.script.record("check_destination_access", ref)

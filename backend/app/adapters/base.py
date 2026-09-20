@@ -109,6 +109,13 @@ class InboundMessage:
     grouped_id: int | None = None
     partial_album: bool = False
 
+    #: Addresses that are in the message but not in its text — a hyperlink
+    #: behind words. A promotional post very often reads "👉 Join here" with
+    #: the address only in the entity, so text alone misses exactly the
+    #: messages a link scan is for. URLs only; no other part of an entity is
+    #: carried across this boundary.
+    entity_urls: list[str] = field(default_factory=list)
+
     @property
     def primary_id(self) -> int:
         return min(self.message_ids)
@@ -140,6 +147,25 @@ class ChatDetails:
 
     description: str | None = None
     member_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LinkPreview:
+    """What Telegram will tell anyone holding a link, before they open it.
+
+    Exactly the preview a person sees on tapping one: a title, a size, and what
+    kind of thing it is. For an invite link that is all Telegram publishes
+    without joining, and this asks for no more than that — nothing here opens
+    a private chat or reads a word inside one.
+
+    ``chat_kind`` may come back ``user``, which is how a ``t.me/name`` that
+    turns out to be a person is recognised and dropped.
+    """
+
+    title: str | None = None
+    member_count: int | None = None
+    chat_kind: str | None = None
+    reason_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +271,16 @@ class TelegramAdapter(Protocol):
         Deliberately not a member list: this asks Telegram what the *chat*
         says about itself, which is what identifies a private group again
         months later when its title alone does not.
+        """
+        ...
+
+    async def preview_link(self, kind: str, key: str) -> LinkPreview:
+        """The title and size behind a ``t.me`` link, without opening it.
+
+        ``kind`` is ``public`` (``key`` is a username) or ``invite`` (``key``
+        is the hash). Both return only what Telegram already shows anyone who
+        taps the link — nothing is joined, and nothing inside is read. Empty
+        when the provider cannot look one up.
         """
         ...
 

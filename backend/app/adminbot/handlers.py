@@ -53,6 +53,7 @@ from app.repositories import autoreply as autoreply_repo
 from app.repositories import broadcasts as broadcast_repo
 from app.repositories import chats as chat_repo
 from app.repositories import connections as connection_repo
+from app.repositories import discovered_links as link_repo
 from app.repositories import events as event_repo
 from app.repositories import jobs as job_repo
 from app.repositories import panel_buttons as panel_buttons_repo
@@ -62,6 +63,7 @@ from app.repositories import users as user_repo
 from app.services import archive as archive_service
 from app.services import broadcast as broadcast_service
 from app.services import connections as connection_service
+from app.services import discovery as discovery_service
 from app.services import users as user_service
 
 log = structlog.get_logger(__name__)
@@ -579,6 +581,66 @@ async def _fill_page_details(session, user_id: uuid.UUID, chats) -> None:  # typ
             continue
         await chat_repo.set_details(session, chat=chat, details=details)
         await asyncio.sleep(0.5)
+
+
+# --------------------------------------------------------------------------- #
+# Discovered links
+# --------------------------------------------------------------------------- #
+async def _links_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
+    """The page being looked at, with its titles filled in and nothing else.
+
+    Resolving is a network call each, so only the five about to be drawn are
+    asked about — the same rule the chat-details screen follows. An account
+    watching busy groups accumulates hundreds of these, and looking every one
+    up would be hundreds of calls for a screen showing five.
+    """
+    async with session_scope() as session:
+        rows = await link_repo.listing(session, user_id=user_id)
+        window, _page, _pages = views._page_of(rows, page, views.LINKS_PAGE_SIZE)
+        pending = await link_repo.unresolved(session, link_ids=[r.link.id for r in window])
+        connections = await connection_repo.list_for_user(session, user_id=user_id)
+
+    if pending:
+        active = [c for c in connections if c.status is ConnectionStatus.active]
+        if active:
+            async with session_scope() as session:
+                adapter = await connection_service.adapter_for(session, active[0])
+                fresh = await link_repo.unresolved(session, link_ids=[p.id for p in pending])
+                await discovery_service.resolve(session, links=fresh, adapter=adapter)
+            async with session_scope() as session:
+                rows = await link_repo.listing(session, user_id=user_id)
+
+    return views.discovered_links(rows=rows, page=page, total=len(rows))
+
+
+@router.callback_query(F.data.startswith("nav:links"))
+async def nav_links(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    await query.answer()
+    await _render(query, await _links_screen(user_id, page=_page_from(query.data or "")))
+
+
+@router.callback_query(F.data.startswith("link:"))
+async def link_actions(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+    """Hide one, or sweep the one-offs. Nothing here joins anything."""
+    parts = (query.data or "").split(":")
+    verb = parts[1] if len(parts) > 1 else ""
+
+    if verb == "sweep":
+        async with session_scope() as session:
+            hidden = await link_repo.hide_seen_once(session, user_id=user_id)
+        await _render(query, await _links_screen(user_id, page=0))
+        await query.answer(f"Hid {hidden}." if hidden else "Nothing seen only once.")
+        return
+
+    link_id = views.as_uuid(parts[2] if len(parts) > 2 else None)
+    if verb != "hide" or link_id is None:
+        await query.answer("Unknown action.", show_alert=True)
+        return
+
+    async with session_scope() as session:
+        removed = await link_repo.hide(session, user_id=user_id, link_id=link_id)
+    await _render(query, await _links_screen(user_id, page=0))
+    await query.answer("Hidden." if removed else "Already gone.")
 
 
 async def _dead_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:

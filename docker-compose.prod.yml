@@ -13,10 +13,26 @@
 #     local development; on a public VPS that would put your database on the
 #     internet.
 #   * POSTGRES_PASSWORD becomes mandatory rather than defaulted.
+#   * every service gets a memory ceiling.
+#
+# The ceilings matter most when this stack shares a machine with something
+# else. A leak here then costs this stack rather than the neighbour: Linux
+# kills the process that breached its own cgroup, instead of picking whichever
+# process on the box looks worst at the moment the kernel runs out.
+#
+# They are cgroup limits on the containers, which is the only place they work.
+# A `MemoryMax=` on a systemd unit that runs `docker compose up -d` caps
+# nothing: the containers are children of the docker daemon, and that unit has
+# already exited.
+#
+# Defaults total about 3.5 GB and suit a 4 GB-and-up machine. Override any of
+# them in `.env` — `MEM_WORKER=512m` — rather than editing this file, so an
+# update does not undo the tuning.
 
 services:
   api:
     ports: !reset []
+    mem_limit: ${MEM_API:-512m}
 
   # Never expose a database to the internet.
   # POSTGRES_PASSWORD is threaded into both the server and the app's DSN by the
@@ -25,6 +41,26 @@ services:
     ports: !reset []
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong POSTGRES_PASSWORD in .env}
+    # The most likely thing here to want more room, and the one to raise first
+    # if queries start spilling to disk.
+    mem_limit: ${MEM_POSTGRES:-1g}
 
   redis:
     ports: !reset []
+    # Small on purpose: this holds locks and FSM state, not a cache of
+    # anything. `--appendonly no` in the base file means nothing is kept.
+    mem_limit: ${MEM_REDIS:-256m}
+
+  listener:
+    mem_limit: ${MEM_LISTENER:-512m}
+
+  scheduler:
+    mem_limit: ${MEM_SCHEDULER:-384m}
+
+  # The one that does the sending, and the one holding an ad's image in memory
+  # while it posts. Given the most room of the application services.
+  worker:
+    mem_limit: ${MEM_WORKER:-768m}
+
+  adminbot:
+    mem_limit: ${MEM_ADMINBOT:-512m}

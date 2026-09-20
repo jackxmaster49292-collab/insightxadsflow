@@ -30,6 +30,7 @@ from app.repositories import connections as connection_repo
 from app.security.ratelimit import close_redis, get_redis
 from app.services import autoreply as autoreply_service
 from app.services import connections as connection_service
+from app.services import discovery as discovery_service
 from app.services.dispatch import dispatch_inbound
 
 log = structlog.get_logger(__name__)
@@ -182,6 +183,13 @@ async def _consume(
                 await _maybe_auto_reply(connection_id, adapter, message)
 
             async with session_scope() as session:
+                # Chat links first, and for every message rather than only the
+                # ones a rule matches: this is string work on text already in
+                # memory, and the messages worth noticing links in are exactly
+                # the ones no rule was written for.
+                await discovery_service.note_links(
+                    session, connection_id=connection_id, message=message
+                )
                 result = await dispatch_inbound(
                     session, connection_id=connection_id, message=message
                 )

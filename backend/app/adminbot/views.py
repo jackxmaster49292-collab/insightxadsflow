@@ -173,6 +173,10 @@ def home(
         "",
         "💬 *Auto\\-reply* — answer people who message your account first while "
         "an ad of yours is running\\. It cannot start a conversation\\.",
+        "",
+        "🔗 *Links* — group and channel links people post in the groups you are "
+        "already in, counted so the ones that keep coming up rise to the top\\. "
+        "Nothing is joined for you\\.",
     ]
 
     if not connections:
@@ -188,6 +192,7 @@ def home(
         _rows(
             [InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")],
             [InlineKeyboardButton(text="💬 Auto-reply", callback_data="nav:autoreply")],
+            [InlineKeyboardButton(text="🔗 Links", callback_data="nav:links:0")],
             [
                 InlineKeyboardButton(text="🔗 Accounts", callback_data="nav:conns"),
                 InlineKeyboardButton(text="💭 Groups", callback_data="nav:chats:0"),
@@ -1771,6 +1776,81 @@ def autoreply_screen(*, connection: TelegramConnection | None, reply: AutoReply 
 # --------------------------------------------------------------------------- #
 # Groups and activity
 # --------------------------------------------------------------------------- #
+#: Links per page. Each takes three lines and two buttons, so fewer than the
+#: usual six keeps the screen inside one phone-height.
+LINKS_PAGE_SIZE = 5
+
+
+def discovered_links(*, rows: Sequence, page: int, total: int) -> Screen:  # type: ignore[type-arg]
+    """Chats that keep being mentioned in the groups this account is in.
+
+    Ranked by how many *different* groups carried the link, not by how often it
+    appeared. One person posting the same address fifty times in one chat is
+    one person; six groups carrying it means several communities overlap with
+    it, which is the thing worth acting on.
+    """
+    if not total:
+        return Screen(
+            "🔗 *Links*\n\n"
+            "Nothing yet\\.\n\n"
+            "As people post group and channel links in the groups you are "
+            "already in, they are collected here and counted\\. The ones that "
+            "keep coming up rise to the top\\.\n\n"
+            "This starts empty and fills as messages arrive — it watches, it "
+            "does not go looking\\.\n\n"
+            "_Nothing is joined for you, and nothing about who posted a link "
+            "is kept\\._",
+            _rows(_back("nav:home"), _home_row()),
+        )
+
+    window, page, pages = _page_of(rows, page, LINKS_PAGE_SIZE)
+
+    lines = [
+        f"🔗 *Links* \\({total}\\)",
+        "",
+        "Chats people keep linking to in your groups\\. The more of *your* "
+        "groups carry a link, the higher it sits\\.",
+        "",
+    ]
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in window:
+        link = row.link
+        mark = "🔒" if link.kind == "invite" else "📢" if link.resolved_kind == "channel" else "💭"
+        # An unresolved invite has no name to show — Telegram publishes one
+        # only to whoever asks with the hash, and the raw URL as a title reads
+        # as a broken row rather than as a chat nobody has looked up yet.
+        name = link.resolved_title or ("Invite link" if link.kind == "invite" else link.link_key)
+        head = f"{mark} *{escape(name[:40])}*"
+        if link.resolved_member_count:
+            head += f" — {link.resolved_member_count:,} members"
+        lines.append(head)
+
+        where = "1 group" if row.group_count == 1 else f"*{row.group_count}* of your groups"
+        lines.append(f"   seen *{link.times_seen}×* in {where}")
+        if row.titles:
+            shown = ", ".join(escape(t[:24]) for t in row.titles[:2])
+            more = f", \\+{len(row.titles) - 2}" if len(row.titles) > 2 else ""
+            lines.append(f"   _{shown}{more}_")
+
+        buttons.append(
+            [
+                InlineKeyboardButton(text=f"↗️ {name[:24]}", url=link.url_text),
+                InlineKeyboardButton(text="🚫 Hide", callback_data=f"link:hide:{link.id}"),
+            ]
+        )
+
+    return Screen(
+        "\n".join(lines),
+        _rows(
+            *buttons,
+            _pager("nav:links:", page, pages),
+            [InlineKeyboardButton(text="🧹 Hide the one-offs", callback_data="link:sweep")],
+            _back("nav:home"),
+        ),
+    )
+
+
 def dead_groups(
     *,
     chats: Sequence,  # type: ignore[type-arg]

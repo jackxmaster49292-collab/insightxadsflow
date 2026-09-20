@@ -30,6 +30,7 @@ from app.adapters.base import (
     DiscoveredChat,
     HealthReport,
     InboundMessage,
+    LinkPreview,
     MediaType,
     PeerKind,
     TextEntity,
@@ -311,6 +312,25 @@ class BotAdapter:
     async def installed_custom_emoji(self) -> dict[str, str]:
         # Nor any notion of packs a *bot* owns.
         return {}
+
+    async def preview_link(self, kind: str, key: str) -> LinkPreview:
+        """A public username only, and only if the bot can already see it.
+
+        ``getChat`` on ``@name`` works for a public chat; the Bot API has no
+        equivalent of ``checkChatInvite``, so an invite hash is unanswerable
+        here rather than answered badly.
+        """
+        if kind != "public":
+            return LinkPreview(reason_code=reasons.PEER_INVALID)
+        try:
+            chat = await self._bot.get_chat(f"@{key}")
+            return LinkPreview(
+                title=getattr(chat, "title", None) or getattr(chat, "full_name", None),
+                member_count=await self._bot.get_chat_member_count(f"@{key}"),
+                chat_kind=_chat_kind(getattr(chat, "type", "")),
+            )
+        except Exception as exc:
+            return LinkPreview(reason_code=classify_error(exc).code)
 
     async def chat_details(self, ref: ChatRef) -> ChatDetails:
         chat = await self._bot.get_chat(ref.peer_id)

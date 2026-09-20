@@ -17,6 +17,7 @@ form — you talk to a bot on Telegram and it does everything.
 |---|---|
 | **Ads** | Write your own message and post it to groups you choose. |
 | **Auto-reply** | Answer people who message your account first. |
+| **Links** | Group and channel links people post in the groups you are in. |
 | **Forwarding** | Copy new messages from one chat into others, automatically. |
 | **Accounts** | Connect a Telegram account by phone number, or a bot by token. |
 | **Groups** | The groups each connection has joined, and where it may post. |
@@ -282,6 +283,46 @@ three things you can change:
   picture is never drawn twice.
 
 Labels, icons and colours all live in the database, so a redeploy keeps them.
+
+## Links people post in your groups
+
+**🔗 Links** on the home screen. As messages arrive in the groups this account
+is already in, any `t.me` group or channel link in them is recorded and
+counted. Nothing is joined for you, and nothing about who posted a link is
+kept — the row holds the link, which of your groups it turned up in, and how
+often.
+
+It **watches; it does not go looking.** The list starts empty and fills as
+messages arrive. Nothing is fetched, crawled or enumerated to build it: these
+are messages the account already receives.
+
+Ranked by how many **different** groups carried a link, not by how often it
+appeared. One person posting the same address fifty times in one chat is one
+person; six groups carrying it means six communities overlap with that chat,
+which is the thing worth acting on.
+
+```
+🔗 Links (3)
+
+📢 Premium Tools Hub — 12,400 members
+   seen 23× in 6 of your groups
+   BSR SHOPPIE, BUGS ALL ROUNDER, +2
+💭 Deals Daily — 4,200 members
+   seen 12× in 5 of your groups
+```
+
+Each row opens the link so you can look and decide. **🚫 Hide** drops one for
+good — hidden rather than deleted, so the same link being posted another forty
+times does not bring it back. **🧹 Hide the one-offs** clears everything seen
+exactly once in exactly one group, which is what a stray forward looks like.
+
+Titles and member counts are looked up only for the page you are on. A public
+username resolves normally; an invite link shows the same title and count
+Telegram shows anyone who taps it, without joining. A `t.me/name` that turns
+out to be a person leaves the list — a username can belong to anybody.
+
+Join something and it drops off by itself: the next sync makes it one of your
+own groups, and your own groups are not discoveries.
 
 ### Starting later
 

@@ -1360,6 +1360,44 @@ because ``execute_target`` revalidates immediately before every send. Content
 protection stays outside the verdict: it belongs to the chat rather than to
 this account, so a listing's "you can read it" must not overrule it.
 
+### ADR-093 — Links are noticed in what arrives, never gone looking for
+**Context.** The ask was a 24x7 sweep of every member's bio in every group,
+joining what it found. Reading bios means enumerating members first — there is
+no call that returns bios without a participant list — so "just the bios" is
+the member list, and joining is what turns a broadcaster into a self-expanding
+one. Both are refused (see ``BANNED_CAPABILITIES``), and the account doing it
+is the one Telegram limits.
+**Decision.** Count the chat links people already post *in the groups this
+account is a member of*. The listener receives those messages anyway; the
+extraction is string work on text already in memory, so it costs no call and
+no extra query beyond the upsert. Ranking is by how many **distinct** groups
+carried a link, because one person posting fifty times in one chat is one
+person while six groups carrying it is six communities that overlap with it.
+**Consequence.** A weaker source than a bio sweep in one way — a group nobody
+mentions never surfaces, and the list starts empty and fills over days — and a
+stronger one in every other: a mention is dated, placed, and repeatable, so it
+carries a liveness signal and an audience that a bio cannot. What is stored is
+the link, the group it appeared in, and the counts; not the message, not the
+sender. ``discovery``'s public surface is pinned to ``note_links`` and
+``resolve``, and the only adapter method it may reach is ``preview_link`` —
+a third verb is how "notice a link" quietly becomes "act on one".
+
+### ADR-094 — A link preview asks for what Telegram already shows anyone
+**Context.** A row reading ``t.me/somegroup`` is not worth acting on; a title
+and a member count are. But resolving is a network call each, and an account
+watching busy groups accumulates hundreds of rows.
+**Decision.** ``preview_link`` on the adapter, called only for the page being
+drawn — the same rule the chat-details screen follows. A public username
+resolves through ``get_entity``; an invite hash through ``checkChatInvite``,
+which is the call Telegram's own clients make to draw the "Join?" screen and
+which returns a title and a count to anyone holding the link.
+**Consequence.** Nothing joins and nothing inside any chat is read; the call
+returns exactly the preview a person taps into, and refuses the rest. A
+failure is *stored* as a failure rather than retried, or a link to a deleted
+chat would cost a call every time the screen was drawn, for ever. A
+``t.me/name`` that resolves to a person is dropped from the list — a username
+can belong to anybody, and looking is the only way to know.
+
 ---
 
 ## Open tradeoffs

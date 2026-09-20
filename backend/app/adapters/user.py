@@ -28,6 +28,7 @@ from app.adapters.base import (
     DiscoveredChat,
     HealthReport,
     InboundMessage,
+    LinkPreview,
     MediaType,
     PeerKind,
     TextEntity,
@@ -65,6 +66,21 @@ def _chat_kind(entity: Any) -> str:
     if isinstance(entity, types.Channel):
         return "channel" if getattr(entity, "broadcast", False) else "supergroup"
     return "other"
+
+
+def _entity_urls(message: Any) -> list[str]:
+    """Addresses hidden behind the words of a message.
+
+    ``MessageEntityTextUrl`` is the one that matters — a hyperlink whose text
+    says something else entirely, which is how nearly every promotional post
+    is written. Nothing else about an entity crosses this boundary.
+    """
+    urls: list[str] = []
+    for entity in getattr(message, "entities", None) or []:
+        url = getattr(entity, "url", None)
+        if url:
+            urls.append(str(url))
+    return urls
 
 
 def posting_verdict(entity: Any) -> AccessReport:
@@ -371,6 +387,54 @@ class UserAdapter:
         ids = getattr(result, "document_id", None) or []
         return [str(document_id) for document_id in ids]
 
+    async def preview_link(self, kind: str, key: str) -> LinkPreview:
+        """What Telegram shows on the "Join?" screen, and not one field more.
+
+        A public username resolves to the chat itself. An invite hash goes
+        through ``checkChatInvite``, which is the call Telegram's own clients
+        make to draw that screen: it returns a title and a member count for a
+        link you hold, and refuses everything else. Nothing joins, and no
+        message inside is read.
+        """
+        await self._ready()
+        from telethon.tl.functions.messages import CheckChatInviteRequest
+
+        try:
+            if kind == "invite":
+                invite = await self._client(CheckChatInviteRequest(hash=key))
+                chat = getattr(invite, "chat", None)
+                if chat is not None:
+                    # Already a member: Telegram answers with the chat itself.
+                    return LinkPreview(
+                        title=utils.get_display_name(chat) or None,
+                        member_count=getattr(chat, "participants_count", None),
+                        chat_kind=_chat_kind(chat),
+                    )
+                return LinkPreview(
+                    title=getattr(invite, "title", None),
+                    member_count=getattr(invite, "participants_count", None),
+                    chat_kind="channel" if getattr(invite, "broadcast", False) else "supergroup",
+                )
+
+            entity = await self._client.get_entity(key)
+            count = None
+            if not isinstance(entity, types.User):
+                details = await self.chat_details(
+                    ChatRef(
+                        _peer_kind(entity),
+                        int(utils.get_peer_id(entity)),
+                        access_hash=getattr(entity, "access_hash", None),
+                    )
+                )
+                count = details.member_count
+            return LinkPreview(
+                title=utils.get_display_name(entity) or None,
+                member_count=count,
+                chat_kind="user" if isinstance(entity, types.User) else _chat_kind(entity),
+            )
+        except Exception as exc:
+            return LinkPreview(reason_code=classify_error(exc).code)
+
     async def chat_details(self, ref: ChatRef) -> ChatDetails:
         """What the chat says about itself, from Telegram's ``full`` view.
 
@@ -473,6 +537,7 @@ class UserAdapter:
             text=getattr(message, "message", "") or "",
             has_protected_content=bool(getattr(chat, "noforwards", False)),
             grouped_id=getattr(message, "grouped_id", None),
+            entity_urls=_entity_urls(message),
         )
 
     # --- delivery -------------------------------------------------------- #
