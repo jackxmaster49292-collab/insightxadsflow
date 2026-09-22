@@ -102,6 +102,9 @@ PHONE_NUMBER_UNREGISTERED: Final = "phone_number_unregistered"
 PHONE_NUMBER_FLOOD: Final = "phone_number_flood"
 TWO_FACTOR_REQUIRED: Final = "two_factor_required"
 TWO_FACTOR_PASSWORD_INVALID: Final = "two_factor_password_invalid"  # noqa: S105 - a reason code, not a password
+API_CREDENTIALS_INVALID: Final = "api_credentials_invalid"
+API_CREDENTIALS_FLOODED: Final = "api_credentials_flooded"
+SIGNUP_REQUIRED: Final = "signup_required"
 
 # --- account ----------------------------------------------------------------
 ACCOUNT_SUSPENDED: Final = "account_suspended"
@@ -218,6 +221,20 @@ REASON_TEXT: dict[str, str] = {
     PHONE_NUMBER_FLOOD: (
         "Telegram has temporarily blocked sign-in attempts for that number "
         "after too many tries. Wait — usually a day — before trying again."
+    ),
+    API_CREDENTIALS_INVALID: (
+        "Telegram rejected this deployment's TELEGRAM_API_ID / TELEGRAM_API_HASH. "
+        "They are the pair from my.telegram.org, and they must both come from "
+        "the same application there. Check them in .env and restart."
+    ),
+    API_CREDENTIALS_FLOODED: (
+        "Telegram has rate-limited this deployment's TELEGRAM_API_ID, which "
+        "happens when an api_id is shared widely. Create your own application "
+        "at my.telegram.org and use that pair instead."
+    ),
+    SIGNUP_REQUIRED: (
+        "That phone number has no Telegram account yet, and accounts cannot be "
+        "created from here. Sign up in the Telegram app first."
     ),
     TWO_FACTOR_REQUIRED: "This account has two-step verification. Send the password to continue.",
     TWO_FACTOR_PASSWORD_INVALID: (

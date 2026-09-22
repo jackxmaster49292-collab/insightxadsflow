@@ -372,3 +372,57 @@ def test_telethons_sent_code_types_map_to_words():
     assert _code_channel(SentCodeTypeSms()) == "sms"
     assert _code_channel(SentCodeTypeSomethingNew()) == "unknown"
     assert _code_channel(None) == "unknown"
+
+
+def test_a_sign_in_failure_never_borrows_the_eligibility_sentence():
+    """``UNKNOWN``'s stock text is about chat access. Shown on a failed
+    sign-in it reads as an answer while saying nothing about what went
+    wrong — which is how "Eligibility has not been checked yet" turned up
+    under "Telegram refused to send the code"."""
+    from app.adminbot import views
+    from app.domain import reasons
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    text = views.login_failed(reasons.UNKNOWN)
+
+    assert "Eligibility" not in text, "that sentence belongs to another screen"
+    assert "did not say why" in text, "admit it rather than invent an answer"
+    assert "account_login_start_failed" in text, "and name where the real error is"
+    assert_valid_markdown_v2(text)
+
+
+def test_a_classified_sign_in_failure_says_the_real_reason():
+    from app.adminbot import views
+    from app.domain import reasons
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    text = views.login_failed(reasons.API_CREDENTIALS_INVALID)
+
+    # Escaped, because an unescaped underscore opens italics and Telegram
+    # drops the whole message.
+    assert "TELEGRAM\\_API\\_ID" in text
+    assert_valid_markdown_v2(text)
+
+    for code in (
+        reasons.PHONE_NUMBER_BANNED,
+        reasons.PHONE_NUMBER_FLOOD,
+        reasons.API_CREDENTIALS_FLOODED,
+        reasons.SIGNUP_REQUIRED,
+    ):
+        assert_valid_markdown_v2(views.login_failed(code))
+
+
+def test_telegrams_own_credential_errors_are_classified():
+    """Unmapped, these fell through to ``unknown`` — and a wrong api_id is the
+    single most likely reason a fresh deployment cannot send a code at all."""
+    from app.adapters.errors import classify_error
+    from app.domain import reasons
+
+    class ApiIdInvalidError(Exception):
+        pass
+
+    class ApiIdPublishedFloodError(Exception):
+        pass
+
+    assert classify_error(ApiIdInvalidError()).code == reasons.API_CREDENTIALS_INVALID
+    assert classify_error(ApiIdPublishedFloodError()).code == reasons.API_CREDENTIALS_FLOODED

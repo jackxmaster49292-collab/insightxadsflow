@@ -258,6 +258,27 @@ _CODE_WHERE = {
 }
 
 
+def login_failed(reason_code: str) -> str:
+    """Why the login code could not be sent.
+
+    ``UNKNOWN`` needs its own sentence here. Its stock text — "Eligibility has
+    not been checked yet" — was written for the chat-access screen, and on a
+    failed sign-in it describes a different subsystem entirely: it reads as an
+    answer while telling you nothing, which is worse than admitting the
+    failure is unclassified.
+    """
+    if reason_code == reasons.UNKNOWN:
+        return (
+            "❌ *Telegram refused to send the code*, and did not say why\\.\n\n"
+            "The exact error is in the server log — look for "
+            "`account_login_start_failed`\\.\n\n"
+            "The usual causes: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` wrong or "
+            "missing from `.env`, or too many sign\\-in attempts in a short "
+            "time\\."
+        )
+    return f"❌ *Telegram refused to send the code\\.*\n\n_{escape(reasons.describe(reason_code))}_"
+
+
 def code_sent(*, channel: str, next_channel: str | None = None) -> str:
     """What to tell someone who has just asked for a login code.
 

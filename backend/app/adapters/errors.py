@@ -83,6 +83,13 @@ _BY_EXCEPTION_NAME: dict[str, tuple[ErrorClass, str]] = {
     "PhoneCodeExpiredError": (ErrorClass.AUTH, "login_code_expired"),
     "PhoneCodeEmptyError": (ErrorClass.AUTH, "login_code_invalid"),
     "AuthRestartError": (ErrorClass.AUTH, "login_restart_needed"),
+    # The deployment's own credentials, not the customer's. Unmapped, these
+    # fell through to "unknown", whose sentence is about chat eligibility and
+    # says nothing at all about a sign-in that just failed.
+    "ApiIdInvalidError": (ErrorClass.AUTH, "api_credentials_invalid"),
+    "ApiIdPublishedFloodError": (ErrorClass.RATE_LIMIT, "api_credentials_flooded"),
+    "PhoneNumberAppSignupForbiddenError": (ErrorClass.AUTH, "signup_required"),
+    "PhonePasswordFloodError": (ErrorClass.RATE_LIMIT, "phone_number_flood"),
     "PhoneNumberInvalidError": (ErrorClass.AUTH, "phone_number_invalid"),
     "PhoneNumberBannedError": (ErrorClass.AUTH, "phone_number_banned"),
     "PhoneNumberUnoccupiedError": (ErrorClass.AUTH, "phone_number_unregistered"),

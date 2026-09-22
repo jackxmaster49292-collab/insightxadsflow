@@ -911,8 +911,20 @@ async def account_phone(
             await _go_home(message, user_id)
             return
         except Exception as exc:
+            # Logged, because this used to be swallowed whole: the screen said
+            # something and the server said nothing, so there was no way to
+            # find out what Telegram had actually objected to.
+            from app.adapters.errors import classify_error
+
+            code = classify_error(exc).code
+            log.warning(
+                "account_login_start_failed",
+                code=code,
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+            )
             await state.clear()
-            await _ask(message, f"Telegram refused to send the code\\.\n\n_{_describe(exc)}_")
+            await _ask(message, views.login_failed(code))
             await _go_home(message, user_id)
             return
 
