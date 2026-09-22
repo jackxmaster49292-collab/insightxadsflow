@@ -216,6 +216,86 @@ def home(
     )
 
 
+#: Where the code went, in words, and where to look for it. Telegram decides
+#: this, not the panel — and the one it picks most often is the one people do
+#: not expect.
+_CODE_WHERE = {
+    "app": (
+        "📲 *Telegram sent the code to the Telegram app*, not by SMS\\.",
+        "Look in the chat from *Telegram* \\(the blue tick account\\) on any "
+        "other device that account is already signed in on — a phone, Desktop, "
+        "or Web\\. It is there already\\.\n\n"
+        "Telegram always prefers the app when the account is signed in "
+        "somewhere else\\. No text message will arrive\\.",
+    ),
+    "sms": (
+        "📲 *Telegram sent the code by SMS* to that number\\.",
+        "It can take a minute\\. A virtual or VOIP number often never receives "
+        "it — Telegram filters many of those\\.",
+    ),
+    "call": (
+        "📲 *Telegram is calling that number* with the code\\.",
+        "Answer it and note the digits — no message will arrive\\.",
+    ),
+    "missed_call": (
+        "📲 *Telegram will ring that number and hang up\\.*",
+        "The code is the *last digits of the calling number* in your call "
+        "log — nothing is sent as a message\\.",
+    ),
+    "fragment": (
+        "📲 *That is a Fragment number*, so the code goes to Fragment\\.",
+        "Open *fragment\\.com*, sign in, and read it there\\. It will not reach a phone\\.",
+    ),
+    "email": (
+        "📲 *Telegram sent the code to that account's email\\.*",
+        "Check the inbox tied to the account, not the phone\\.",
+    ),
+    "unknown": (
+        "📲 *Telegram has sent a login code to that account\\.*",
+        "Check the Telegram app on another signed\\-in device first — that is "
+        "where Telegram usually puts it — then SMS\\.",
+    ),
+}
+
+
+def code_sent(*, channel: str, next_channel: str | None = None) -> str:
+    """What to tell someone who has just asked for a login code.
+
+    The channel is the whole message. "A code has been sent" is true and
+    useless: Telegram sends it to the *app* whenever that account is signed in
+    anywhere else, and someone watching their text messages will wait for
+    something that is never coming.
+    """
+    heading, where = _CODE_WHERE.get(channel, _CODE_WHERE["unknown"])
+    lines = [heading, "", where, ""]
+
+    if next_channel and next_channel != channel:
+        fallback = {
+            "sms": "an SMS",
+            "call": "a phone call",
+            "missed_call": "a missed call",
+            "app": "the Telegram app",
+            "email": "email",
+            "fragment": "Fragment",
+        }.get(next_channel)
+        if fallback:
+            lines += [
+                f"_If it truly does not arrive, asking again sends {escape(fallback)} "
+                "instead — start the connection over\\._",
+                "",
+            ]
+
+    lines += [
+        "Send it here — but *put a space or a dash between the digits*, like "
+        "`1 2 3 4 5` or `1\\-2\\-3\\-4\\-5`\\.",
+        "",
+        "Telegram cancels a login code it sees posted as plain digits in a "
+        "chat\\. That protection is on your side, so work with it rather than "
+        "around it\\.",
+    ]
+    return "\n".join(lines)
+
+
 def panel_emoji() -> tuple[str, ...]:
     """Every emoji the panel draws, read from its own source.
 

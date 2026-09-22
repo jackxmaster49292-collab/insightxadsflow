@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.base import ConnectionState, TelegramAdapter
+from app.adapters.base import CodeDelivery, ConnectionState, TelegramAdapter
 from app.adapters.factory import build_adapter
 from app.config import get_settings
 from app.db.models import ConnectionKind, ConnectionStatus, TelegramConnection
@@ -80,6 +80,9 @@ class PendingLogin:
     phone: str
     phone_code_hash: str
     adapter: TelegramAdapter | None = None
+    #: Where Telegram said it sent the code — see ``adapters.base.CodeDelivery``.
+    channel: str = "unknown"
+    next_channel: str | None = None
 
 
 _PENDING_LOGINS: dict[uuid.UUID, PendingLogin] = {}
@@ -173,14 +176,20 @@ async def start_user_connection(
 
     adapter = await adapter_for(session, connection)
     if hasattr(adapter, "start_login"):
-        phone_code_hash = await adapter.start_login(phone)
+        delivery = await adapter.start_login(phone)
     else:  # mock provider
-        phone_code_hash = "mock-code-hash"
+        delivery = CodeDelivery(phone_code_hash="mock-code-hash", channel="app")
     # The adapter is kept, not rebuilt later: Telegram ties the code it just sent
     # to this client.
     remember_login(
         connection.id,
-        PendingLogin(phone=phone, phone_code_hash=phone_code_hash, adapter=adapter),
+        PendingLogin(
+            phone=phone,
+            phone_code_hash=delivery.phone_code_hash,
+            adapter=adapter,
+            channel=delivery.channel,
+            next_channel=delivery.next_channel,
+        ),
     )
     return connection
 

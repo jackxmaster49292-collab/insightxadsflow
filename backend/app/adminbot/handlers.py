@@ -918,16 +918,17 @@ async def account_phone(
 
         connection_id = connection.id
 
+    pending = connection_service.take_login(connection_id)
     await state.update_data(connection_id=str(connection_id))
     await state.set_state(ConnectAccount.code)
     await _ask(
         message,
-        "📲 Telegram has sent a login code to that account\\.\n\n"
-        "Send it here — but *put a space or a dash between the digits*, like "
-        "`1 2 3 4 5` or `1\\-2\\-3\\-4\\-5`\\.\n\n"
-        "Telegram cancels a login code it sees posted as plain digits in a chat\\. "
-        "That protection is on your side, so work with it rather than around "
-        "it\\.\n\n" + secrets.WARNING,
+        views.code_sent(
+            channel=pending.channel if pending else "unknown",
+            next_channel=pending.next_channel if pending else None,
+        )
+        + "\n\n"
+        + secrets.WARNING,
     )
 
 

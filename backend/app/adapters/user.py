@@ -23,6 +23,7 @@ from app.adapters.base import (
     Capabilities,
     ChatDetails,
     ChatRef,
+    CodeDelivery,
     ConnectionState,
     DeliveryReceipt,
     DiscoveredChat,
@@ -66,6 +67,34 @@ def _chat_kind(entity: Any) -> str:
     if isinstance(entity, types.Channel):
         return "channel" if getattr(entity, "broadcast", False) else "supergroup"
     return "other"
+
+
+#: Telethon's sent-code types, mapped onto the words the panel uses. Matched on
+#: the class name rather than by importing each type: Telegram has added
+#: several of these over the years, and an import that does not exist in the
+#: installed version would break sign-in entirely rather than label it vaguely.
+_CODE_CHANNELS = {
+    "SentCodeTypeApp": "app",
+    "SentCodeTypeSms": "sms",
+    "SentCodeTypeCall": "call",
+    "SentCodeTypeFlashCall": "call",
+    "SentCodeTypeMissedCall": "missed_call",
+    "SentCodeTypeFragmentSms": "fragment",
+    "SentCodeTypeEmailCode": "email",
+    "SentCodeTypeSetUpEmailRequired": "email",
+    "CodeTypeApp": "app",
+    "CodeTypeSms": "sms",
+    "CodeTypeCall": "call",
+    "CodeTypeFlashCall": "call",
+    "CodeTypeMissedCall": "missed_call",
+    "CodeTypeFragmentSms": "fragment",
+}
+
+
+def _code_channel(sent_type: Any) -> str:
+    if sent_type is None:
+        return "unknown"
+    return _CODE_CHANNELS.get(type(sent_type).__name__, "unknown")
 
 
 def _entity_urls(message: Any) -> list[str]:
@@ -263,8 +292,8 @@ class UserAdapter:
             premium=bool(getattr(me, "premium", False)),
         )
 
-    async def start_login(self, phone: str) -> str:
-        """Sends the login code. Returns the ``phone_code_hash`` to carry forward.
+    async def start_login(self, phone: str) -> CodeDelivery:
+        """Sends the login code, and says where Telegram sent it.
 
         Worth knowing before choosing this over QR: Telegram cancels any login
         code it sees an account send inside a Telegram chat. Completing a
@@ -272,10 +301,22 @@ class UserAdapter:
         ``PhoneCodeInvalid`` even when the digits are correct — the code was
         burned in transit. That protection is deliberate and is not worked
         around here.
+
+        The delivery channel comes back on the same response and used to be
+        discarded. It is the single most useful thing to tell someone at this
+        point: Telegram prefers the *app* over SMS whenever that account is
+        signed in anywhere else, and a person watching their inbox for a text
+        will never find it.
         """
         await self._ready()
         sent = await self._client.send_code_request(phone)
-        return str(sent.phone_code_hash)
+        return CodeDelivery(
+            phone_code_hash=str(sent.phone_code_hash),
+            channel=_code_channel(getattr(sent, "type", None)),
+            next_channel=_code_channel(getattr(sent, "next_type", None))
+            if getattr(sent, "next_type", None) is not None
+            else None,
+        )
 
     async def complete_login(self, phone: str, code: str, phone_code_hash: str) -> ConnectionState:
         from telethon.errors import SessionPasswordNeededError

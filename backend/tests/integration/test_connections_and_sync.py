@@ -310,3 +310,65 @@ def test_the_two_verdicts_are_one_implementation():
     body = inspect.getsource(user_adapter.UserAdapter.check_destination_access)
     assert "posting_verdict(" in body, "the check delegates rather than repeating itself"
     assert "banned_rights" not in body, "and holds no copy of the rules"
+
+
+# --------------------------------------------------------------------------- #
+# Where the code actually went
+# --------------------------------------------------------------------------- #
+def test_the_code_screen_says_where_telegram_sent_it():
+    """Telegram prefers the *app* whenever that account is signed in anywhere
+    else, so someone watching their text messages waits for something that is
+    never coming. "A code has been sent" is true and useless."""
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    app = views.code_sent(channel="app")
+    assert "Telegram app" in app and "not by SMS" in app
+    assert "No text message will arrive" in app
+
+    sms = views.code_sent(channel="sms")
+    assert "SMS" in sms
+    assert "VOIP" in sms, "and why a virtual number may never get one"
+
+    for channel in ("app", "sms", "call", "missed_call", "fragment", "email", "unknown"):
+        assert_valid_markdown_v2(views.code_sent(channel=channel))
+
+
+def test_an_unrecognised_channel_still_gives_somewhere_to_look():
+    """Telegram has added several delivery types over the years. A new one must
+    degrade to useful advice, not to a blank."""
+    from app.adminbot import views
+
+    text = views.code_sent(channel="something_new_telegram_invented")
+    assert "Telegram app" in text, "the most likely place, named"
+    assert "space or a dash" in text, "and the instructions still arrive"
+
+
+def test_the_fallback_channel_is_named_when_it_differs():
+    from app.adminbot import views
+
+    assert "an SMS" in views.code_sent(channel="app", next_channel="sms")
+    assert "instead" not in views.code_sent(channel="app", next_channel="app"), (
+        "no point offering the same channel again"
+    )
+
+
+def test_telethons_sent_code_types_map_to_words():
+    """Matched on the class name rather than by importing each type: Telegram
+    has added several, and an import missing from the installed version would
+    break sign-in outright rather than label it vaguely."""
+    from app.adapters.user import _code_channel
+
+    class SentCodeTypeApp:
+        pass
+
+    class SentCodeTypeSms:
+        pass
+
+    class SentCodeTypeSomethingNew:
+        pass
+
+    assert _code_channel(SentCodeTypeApp()) == "app"
+    assert _code_channel(SentCodeTypeSms()) == "sms"
+    assert _code_channel(SentCodeTypeSomethingNew()) == "unknown"
+    assert _code_channel(None) == "unknown"

@@ -150,6 +150,28 @@ class ChatDetails:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeDelivery:
+    """Where Telegram actually sent the login code.
+
+    Not a detail. Telegram sends the code to the **Telegram app** on any other
+    device that account is already signed in on, and only falls back to SMS
+    when there is none — so someone watching their text messages can wait for a
+    code that was delivered minutes ago, to an app two inches away. Saying
+    "a code has been sent" without saying where is the difference between a
+    thirty-second step and a dead end.
+
+    ``channel`` is one of ``app``, ``sms``, ``call``, ``missed_call``,
+    ``fragment``, ``email`` or ``unknown``. ``next_channel`` is what Telegram
+    would use if asked again, which is the way out when the first one cannot
+    be reached.
+    """
+
+    phone_code_hash: str
+    channel: str = "unknown"
+    next_channel: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class LinkPreview:
     """What Telegram will tell anyone holding a link, before they open it.
 
