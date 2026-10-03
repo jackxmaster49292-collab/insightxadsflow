@@ -270,6 +270,24 @@ async def _fill_details(
         await _sleep(_DETAILS_GAP_S)
 
 
+def _whose(owner: User | None) -> str:
+    """Whose round this was, on the line under the heading.
+
+    One archive serves the whole deployment, so once more than one person can
+    use the bot every round lands in the same group. Without this the operator
+    has a pile of other people's groups and no way to tell whose is whose —
+    and the archive exists to be read months later, by which time nobody
+    remembers.
+
+    The Telegram id is always there because a username can be changed or
+    dropped, and the id cannot.
+    """
+    if owner is None:
+        return "   from an account that no longer exists"
+    who = f"@{owner.telegram_username}" if owner.telegram_username else "no username"
+    return f"   {who} · {owner.telegram_user_id or '—'}"
+
+
 def _index_lines(rows: list[tuple[BroadcastTarget, TelegramChat]]) -> list[str]:
     """One line per group: where it went, how to get back, and — for a private
     group — what it says about itself, because the title alone will not be
@@ -341,6 +359,7 @@ async def store_round(
     destination = await destination_for(session, user_id=broadcast.user_id)
     if destination is None:
         return 0
+    owner = await session.get(User, broadcast.user_id)
 
     rows = await _delivered(session, broadcast_id=broadcast.id)
     if not rows:
@@ -390,7 +409,7 @@ async def store_round(
     except Exception as exc:
         log.warning("archive_copy_failed", broadcast_id=str(broadcast.id), error=str(exc))
 
-    header = f"📁 {broadcast.name}{round_label} — {len(lines)} groups"
+    header = f"📁 {broadcast.name}{round_label} — {len(lines)} groups\n{_whose(owner)}"
     for chunk in _chunks(lines, header=header):
         try:
             await courier.send_text(ref, chunk)

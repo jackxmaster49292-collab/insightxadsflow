@@ -1273,3 +1273,41 @@ async def test_one_archive_serves_every_operator_account(
     archived = _bot_script().calls_to("send_text")
     assert archived, "the second account's ad reached the one archive"
     assert archived[-1].args[0].peer_id == BOT_GROUP_ID
+
+
+# --------------------------------------------------------------------------- #
+# Whose round was it
+# --------------------------------------------------------------------------- #
+def test_the_index_header_names_whose_round_it_was():
+    """One archive serves the whole deployment, so once more than one person
+    can use the bot every round lands in the same group. Without a name the
+    operator has a pile of other people's groups and no way to tell them
+    apart — months later, when the archive is actually read."""
+    from types import SimpleNamespace
+
+    from app.services.archive import _whose
+
+    named = _whose(SimpleNamespace(telegram_username="someone", telegram_user_id=7712034015))
+    assert "@someone" in named
+    assert "7712034015" in named, "the id, because a username can be changed or dropped"
+
+    nameless = _whose(SimpleNamespace(telegram_username=None, telegram_user_id=7712034015))
+    assert "7712034015" in nameless
+    assert "no username" in nameless
+
+    assert "no longer exists" in _whose(None), "a deleted account still gets a line"
+
+
+async def test_a_round_is_archived_under_its_owner(client, actor, session):
+    """End to end: the header carries the ad, the round, the group count and
+    whose it was."""
+    from app.db.models import User
+    from app.services.archive import _whose
+
+    owner = await session.get(User, uuid.UUID(actor.id))
+    owner.telegram_username = "adowner"
+    owner.telegram_user_id = 7712034015
+    await session.commit()
+
+    line = _whose(owner)
+    assert "@adowner" in line and "7712034015" in line
