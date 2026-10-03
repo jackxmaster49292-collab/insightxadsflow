@@ -42,6 +42,7 @@ from app.adminbot.states import (
 )
 from app.config import get_settings
 from app.db.models import (
+    AccessRequestStatus,
     BroadcastMedia,
     BroadcastStatus,
     ConnectionKind,
@@ -49,6 +50,7 @@ from app.db.models import (
     ControlTaskKind,
 )
 from app.db.session import session_scope
+from app.repositories import access_requests as request_repo
 from app.repositories import autoreply as autoreply_repo
 from app.repositories import broadcasts as broadcast_repo
 from app.repositories import chats as chat_repo
@@ -614,14 +616,23 @@ async def _links_screen(user_id: uuid.UUID, *, page: int) -> views.Screen:
 
 
 @router.callback_query(F.data.startswith("nav:links"))
-async def nav_links(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+async def nav_links(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    # Hiding the button is presentation; this is the gate.
+    if not await _require_operator(query, is_operator):
+        return
     await query.answer()
     await _render(query, await _links_screen(user_id, page=_page_from(query.data or "")))
 
 
 @router.callback_query(F.data.startswith("link:"))
-async def link_actions(query: CallbackQuery, user_id: uuid.UUID, **_extra: Any) -> None:
+async def link_actions(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
     """Hide one, or sweep the one-offs. Nothing here joins anything."""
+    if not await _require_operator(query, is_operator):
+        return
     parts = (query.data or "").split(":")
     verb = parts[1] if len(parts) > 1 else ""
 
@@ -2738,11 +2749,79 @@ async def nav_users(query: CallbackQuery, is_operator: bool = False, **_extra: A
     await query.answer()
 
 
+@router.callback_query(F.data.startswith("acc:"))
+async def access_decision(
+    query: CallbackQuery, user_id: uuid.UUID, is_operator: bool = False, **_extra: Any
+) -> None:
+    """Approve or deny someone who asked to use this bot.
+
+    Operator-only, and checked here rather than trusted from the button: the
+    buttons arrive in a message, and a message can be forwarded.
+    """
+    if not await _require_operator(query, is_operator):
+        return
+    parts = (query.data or "").split(":")
+    verb = parts[1] if len(parts) > 1 else ""
+    request_id = views.as_uuid(parts[2] if len(parts) > 2 else None)
+
+    if verb == "list":
+        async with session_scope() as session:
+            waiting = await request_repo.pending(session)
+        await _render(query, views.access_requests(rows=waiting))
+        await query.answer()
+        return
+
+    if verb not in ("ok", "no") or request_id is None:
+        await query.answer("Unknown action.", show_alert=True)
+        return
+
+    approved = verb == "ok"
+    async with session_scope() as session:
+        request = await request_repo.by_id(session, request_id=request_id)
+        if request is None:
+            await query.answer("That request no longer exists.", show_alert=True)
+            return
+        already = request.status is not AccessRequestStatus.pending
+        telegram_user_id = request.telegram_user_id
+        if not already:
+            await request_repo.decide(
+                session, request=request, approved=approved, decided_by=user_id
+            )
+            await event_repo.audit(
+                session,
+                user_id=user_id,
+                action="admin.access_approved" if approved else "admin.access_denied_request",
+                object_type="telegram_user",
+                object_id=str(telegram_user_id),
+            )
+
+    if already:
+        await query.answer("Already decided.", show_alert=True)
+    else:
+        await query.answer("Approved." if approved else "Denied.")
+        # Told only on approval. A denial is left silent on purpose: the person
+        # already saw "your request has been sent", and a refusal that names
+        # itself invites a second account and a second ask.
+        if approved and query.bot:
+            with contextlib.suppress(Exception):
+                await query.bot.send_message(
+                    telegram_user_id,
+                    "✅ Your request was approved. Send /start to begin.",
+                )
+
+    if isinstance(query.message, Message):
+        async with session_scope() as session:
+            waiting = await request_repo.pending(session)
+        with contextlib.suppress(TelegramBadRequest):
+            await _render(query, views.access_requests(rows=waiting))
+
+
 async def _users_screen(*, page: int) -> views.Screen:
     async with session_scope() as session:
         users = await user_repo.list_all(session)
         totals = await user_repo.counts(session)
-    return views.users_list(users=users, page=page, totals=totals)
+        waiting = len(await request_repo.pending(session))
+    return views.users_list(users=users, page=page, totals=totals, waiting=waiting)
 
 
 @router.callback_query(F.data.startswith("usr:"))

@@ -1103,3 +1103,46 @@ class DiscoveredLinkSource(Base):
     __table_args__ = (
         UniqueConstraint("link_id", "chat_id", name="uq_discovered_link_sources_link_chat"),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Asking to be let in
+# --------------------------------------------------------------------------- #
+class AccessRequestStatus(enum.StrEnum):
+    pending = "pending"
+    approved = "approved"
+    denied = "denied"
+
+
+class AccessRequest(Base, TimestampMixin):
+    """Someone who found the bot and asked to use it.
+
+    Exists so that ``ACCESS_MODE=request`` can be a real third option rather
+    than a choice between "nobody but me" and "whoever finds the username". The
+    row is the durable record: the operator is messaged the moment a request
+    arrives, but a message can fail to send, and a decision that was never made
+    must still be findable afterwards.
+
+    Keyed by Telegram id, one row per person for ever. A denial is kept rather
+    than deleted — otherwise the same stranger reappears in the operator's
+    messages every time they tap /start.
+    """
+
+    __tablename__ = "access_requests"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    telegram_username: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[AccessRequestStatus] = mapped_column(
+        _enum(AccessRequestStatus, "access_request_status"),
+        default=AccessRequestStatus.pending,
+        nullable=False,
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The operator who decided. Nullable because the operator's own user row is
+    #: deleted independently, and losing it must not lose the decision.
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+    __table_args__ = (Index("ix_access_requests_status", "status"),)

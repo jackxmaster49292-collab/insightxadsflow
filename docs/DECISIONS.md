@@ -1398,6 +1398,37 @@ chat would cost a call every time the screen was drawn, for ever. A
 ``t.me/name`` that resolves to a person is dropped from the list — a username
 can belong to anybody, and looking is the only way to know.
 
+### ADR-095 — A stranger may ask, and waits for a person to answer
+**Context.** ``ACCESS_MODE`` offered two settings and neither fit: ``closed``
+means nobody but the ids in ``.env``, and ``open`` means whoever finds the
+username gets an account. The operator wanted to hand the username out and
+decide case by case.
+**Decision.** A third mode, ``request``. An unknown person is recorded in
+``access_requests``, every operator is messaged with Approve and Deny on the
+message itself, and the person is told their request was sent. Nothing else
+works for them until a decision exists.
+**Consequence.** The row is written *before* the message goes out: a message
+can fail to send, and a request nobody can find afterwards is worse than one
+nobody has read yet. ``👥 Users`` shows the waiting count and reaches the same
+buttons, which is the path when the message was missed. A denial is kept
+rather than deleted — otherwise the same stranger reappears on every /start —
+and is answered with the identical text a closed deployment gives, so being
+refused is indistinguishable from the bot being private. Approval is told;
+denial is not, because a refusal that names itself invites a second account.
+Operator status itself remains a ``.env`` decision (ADR-032): approving someone
+makes them an ordinary user, never an operator.
+
+### ADR-096 — Links is an operator screen
+**Context.** 🔗 Links was offered to everyone. It reads what arrives in the
+groups of a connection, and on a deployment with other people on it that is
+not a screen an ordinary account should be handed.
+**Decision.** Operator-only, hidden from the home screen and from the
+introduction text, with the handler checking rather than trusting the button.
+**Consequence.** The data was already scoped per user, so this changes who is
+*offered* the screen rather than what it would have shown them — but a button
+that exists is a button that gets pressed, and the check in the handler is the
+part that actually holds.
+
 ---
 
 ## Open tradeoffs

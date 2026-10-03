@@ -173,11 +173,14 @@ def home(
         "",
         "💬 *Auto\\-reply* — answer people who message your account first while "
         "an ad of yours is running\\. It cannot start a conversation\\.",
-        "",
-        "🔗 *Links* — group and channel links people post in the groups you are "
-        "already in, counted so the ones that keep coming up rise to the top\\. "
-        "Nothing is joined for you\\.",
     ]
+    if is_operator:
+        lines += [
+            "",
+            "🔗 *Links* — group and channel links people post in the groups you "
+            "are already in, counted so the ones that keep coming up rise to "
+            "the top\\. Nothing is joined for you\\.",
+        ]
 
     if not connections:
         lines += [
@@ -192,7 +195,6 @@ def home(
         _rows(
             [InlineKeyboardButton(text="📣 Ads", callback_data="nav:ads:0")],
             [InlineKeyboardButton(text="💬 Auto-reply", callback_data="nav:autoreply")],
-            [InlineKeyboardButton(text="🔗 Links", callback_data="nav:links:0")],
             [
                 InlineKeyboardButton(text="🔗 Accounts", callback_data="nav:conns"),
                 InlineKeyboardButton(text="💭 Groups", callback_data="nav:chats:0"),
@@ -205,7 +207,12 @@ def home(
             # Only operators see this, and only they can reach the handler —
             # hiding the button is presentation, the middleware is the gate.
             [
+                InlineKeyboardButton(text="🔗 Links", callback_data="nav:links:0"),
                 InlineKeyboardButton(text="👥 Users", callback_data="nav:users:0"),
+            ]
+            if is_operator
+            else [],
+            [
                 InlineKeyboardButton(text="✨ Icons", callback_data="op:emoji"),
                 InlineKeyboardButton(text="🔤 Buttons", callback_data="op:btn:0"),
                 InlineKeyboardButton(text="🗄 Archive", callback_data="nav:arch:0"),
@@ -256,6 +263,46 @@ _CODE_WHERE = {
         "where Telegram usually puts it — then SMS\\.",
     ),
 }
+
+
+def access_requests(*, rows: Sequence) -> Screen:  # type: ignore[type-arg]
+    """Everyone waiting on a decision.
+
+    The operator is messaged when a request arrives, and that message carries
+    the buttons — this screen is for the ones that message missed: sent while
+    the operator's phone was off, scrolled past, or arriving before this
+    deployment knew about them.
+    """
+    if not rows:
+        return Screen(
+            "👤 *Access requests*\n\nNobody is waiting\\.\n\n"
+            "_With `ACCESS_MODE=request`, anyone who opens this bot can ask\\. "
+            "They can do nothing at all until you approve them\\._",
+            _rows(_back("nav:users:0"), _home_row()),
+        )
+
+    lines = [f"👤 *Access requests* \\({len(rows)}\\)", ""]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        name = row.telegram_username and f"@{row.telegram_username}"
+        lines.append(f"• {escape(name or str(row.telegram_user_id))} — `{row.telegram_user_id}`")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✅ {(name or str(row.telegram_user_id))[:20]}",
+                    callback_data=f"acc:ok:{row.id}",
+                ),
+                InlineKeyboardButton(text="🚫 Deny", callback_data=f"acc:no:{row.id}"),
+            ]
+        )
+
+    lines += [
+        "",
+        "_Approving lets them use the panel with their own ads and "
+        "their own groups\\. They never see yours\\._",
+    ]
+
+    return Screen("\n".join(lines), _rows(*buttons, _back("nav:users:0"), _home_row()))
 
 
 def login_failed(reason_code: str) -> str:
@@ -737,7 +784,13 @@ def panel_buttons_list(*, custom: dict[str, str], page: int) -> Screen:
 # --------------------------------------------------------------------------- #
 # Users (operators only)
 # --------------------------------------------------------------------------- #
-def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:  # type: ignore[type-arg]
+def users_list(
+    *,
+    users: Sequence,  # type: ignore[type-arg]
+    page: int,
+    totals: dict[str, int],
+    waiting: int = 0,
+) -> Screen:
     """Who is using this deployment. Counts only — never anyone's content."""
     window, page, pages = _page_of(users, page, PAGE_SIZE)
     lines = [
@@ -746,6 +799,8 @@ def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:
         f"{totals.get('total', 0)} total · {totals.get('suspended', 0)} suspended",
         "",
     ]
+    if waiting:
+        lines += [f"⏳ *{waiting} waiting to be let in\\.*", ""]
 
     buttons = [
         [
@@ -761,9 +816,20 @@ def users_list(*, users: Sequence, page: int, totals: dict[str, int]) -> Screen:
         "\n".join(lines),
         InlineKeyboardMarkup(
             inline_keyboard=[
-                *buttons,
-                _pager("nav:users:", page, pages),
-                _home_row(),
+                row
+                for row in (
+                    *buttons,
+                    [
+                        InlineKeyboardButton(
+                            text=f"👤 Requests ({waiting})", callback_data="acc:list:"
+                        )
+                    ]
+                    if waiting
+                    else [],
+                    _pager("nav:users:", page, pages),
+                    _home_row(),
+                )
+                if row
             ]
         ),
     )

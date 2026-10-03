@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     #: Defaults to "closed" deliberately: an existing deployment pulling this
     #: version must not silently become open to everyone who finds the bot.
     #: Opening it is a decision, so it is an explicit line in .env.
-    access_mode: Literal["open", "closed"] = "closed"
+    access_mode: Literal["open", "closed", "request"] = "closed"
 
     #: How many Telegram connections one person may hold.
     #:
@@ -258,6 +258,11 @@ class Settings(BaseSettings):
     @property
     def open_access(self) -> bool:
         return self.access_mode == "open"
+
+    @property
+    def request_access(self) -> bool:
+        """Strangers may ask, and wait. Not the same as being let in."""
+        return self.access_mode == "request"
 
     def require_admin_bot_token(self) -> str:
         if not self.admin_bot_token:

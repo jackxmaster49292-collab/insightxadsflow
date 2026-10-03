@@ -518,3 +518,113 @@ async def test_flooding_the_bot_is_throttled(client, monkeypatch):
     assert results[:3] == ["handled"] * 3
     assert results[3:] == [None, None]
     assert "too quickly" in Sent.text()
+
+
+# --------------------------------------------------------------------------- #
+# ACCESS_MODE=request — a stranger may ask, and waits
+# --------------------------------------------------------------------------- #
+async def test_a_stranger_is_told_they_asked_and_let_in_once_approved(client, session):
+    """The third option between "nobody but me" and "whoever finds the
+    username". Nobody gets in without a person deciding."""
+    import uuid as _uuid
+
+    from app.db.models import AccessRequestStatus
+    from app.repositories import access_requests as request_repo
+
+    row, is_new = await request_repo.record(session, telegram_user_id=999_111, username="stranger")
+    await session.commit()
+
+    assert is_new
+    assert row.status is AccessRequestStatus.pending
+
+    # Asking again is one request, not two — the middleware runs on every update.
+    again, is_new_again = await request_repo.record(
+        session, telegram_user_id=999_111, username="stranger"
+    )
+    await session.commit()
+    assert not is_new_again
+    assert again.id == row.id
+
+    await request_repo.decide(session, request=row, approved=True, decided_by=None)
+    await session.commit()
+
+    assert (await request_repo.get(session, telegram_user_id=999_111)).status is (
+        AccessRequestStatus.approved
+    )
+    assert await request_repo.pending(session) == [], "approved is no longer waiting"
+    assert _uuid.UUID(str(row.id))
+
+
+async def test_asking_again_does_not_undo_a_denial(client, session):
+    """Otherwise a refusal is a speed bump: tap /start, ask again, repeat."""
+    from app.db.models import AccessRequestStatus
+    from app.repositories import access_requests as request_repo
+
+    row, _ = await request_repo.record(session, telegram_user_id=999_222, username="pest")
+    await request_repo.decide(session, request=row, approved=False, decided_by=None)
+    await session.commit()
+
+    again, is_new = await request_repo.record(session, telegram_user_id=999_222, username="pest")
+    await session.commit()
+
+    assert not is_new
+    assert again.status is AccessRequestStatus.denied, "still denied"
+
+
+async def test_a_changed_username_is_picked_up(client, session):
+    """The operator should be looking at who they are now, not who they were
+    when they first tapped /start."""
+    from app.repositories import access_requests as request_repo
+
+    await request_repo.record(session, telegram_user_id=999_333, username="old_name")
+    await session.commit()
+    await request_repo.record(session, telegram_user_id=999_333, username="new_name")
+    await session.commit()
+
+    row = await request_repo.get(session, telegram_user_id=999_333)
+    assert row.telegram_username == "new_name"
+
+
+def test_the_requests_screen_offers_a_decision_per_person():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import (
+        assert_keyboard_is_sendable,
+        assert_valid_markdown_v2,
+    )
+
+    rows = [
+        SimpleNamespace(id=uuid4(), telegram_user_id=111, telegram_username="someone"),
+        SimpleNamespace(id=uuid4(), telegram_user_id=222, telegram_username=None),
+    ]
+    screen = views.access_requests(rows=rows)
+
+    data = [b.callback_data for r in screen.keyboard.inline_keyboard for b in r]
+    assert sum(1 for d in data if (d or "").startswith("acc:ok:")) == 2
+    assert sum(1 for d in data if (d or "").startswith("acc:no:")) == 2
+    assert "222" in screen.text, "no username, so the id has to identify them"
+    assert_valid_markdown_v2(screen.text)
+    assert_keyboard_is_sendable(screen.keyboard)
+
+    empty = views.access_requests(rows=[])
+    assert "Nobody is waiting" in empty.text
+    assert_valid_markdown_v2(empty.text)
+
+
+def test_links_is_an_operator_screen():
+    """It reads what arrives in the groups of every connection on the
+    deployment, so it is not something an ordinary account is offered."""
+    from app.adminbot import views
+    from tests.integration.test_bot_flows import assert_valid_markdown_v2
+
+    plain = views.home(connections=[], rules=[], broadcasts=[], counts={}, is_operator=False)
+    plain_data = [b.callback_data for r in plain.keyboard.inline_keyboard for b in r]
+    assert "nav:links:0" not in plain_data
+    assert "Links" not in plain.text, "not advertised either"
+    assert_valid_markdown_v2(plain.text)
+
+    operator = views.home(connections=[], rules=[], broadcasts=[], counts={}, is_operator=True)
+    operator_data = [b.callback_data for r in operator.keyboard.inline_keyboard for b in r]
+    assert "nav:links:0" in operator_data
